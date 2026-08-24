@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ sub.title }} — разбор{% endblock %}
+{% block content %}
+<a class="link-back" href="{{ url_for('dashboard') }}">← Назад к работам</a>
+
+<div class="report-head">
+  <div>
+    <div class="eyebrow">{{ sub.subject_code }} · {{ sub.subject_name }}</div>
+    <h1 class="page-title" style="font-size:26px;">{{ sub.title }}</h1>
+    <div class="report-meta">Сдано {{ sub.date }} · {{ sub.n_words }} слов · {{ sub.n_windows }} фрагментов проанализировано</div>
+  </div>
+  <div class="segtoggle">
+    <button class="seg-btn mode-style" id="btn-style" onclick="setMode('style')">Авторский стиль · {{ sub.style_overall_pct }}%</button>
+    <button class="seg-btn mode-ai" id="btn-ai" onclick="setMode('ai')">AI Detection · {{ sub.ai_overall_pct }}%</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="readout">
+    <div class="gauge-wrap">
+      <svg viewBox="0 0 148 148" width="148" height="148">
+        <circle cx="74" cy="74" r="62" fill="none" stroke="var(--rule)" stroke-width="10"/>
+        <circle id="gauge-fill" cx="74" cy="74" r="62" fill="none" stroke="var(--style-accent)"
+                stroke-width="10" stroke-linecap="round"
+                stroke-dasharray="389.6" stroke-dashoffset="389.6"
+                transform="rotate(-90 74 74)"/>
+      </svg>
+      <div class="gauge-num">
+        <span class="n" id="gauge-num">{{ sub.style_overall_pct }}</span>
+        <span class="u">%</span>
+      </div>
+    </div>
+    <div class="readout-copy">
+      <h2 id="readout-title">Совпадение стиля с {{ sub.target_author_display }}</h2>
+      <p id="readout-desc">Общий вердикт модели атрибуции по всему тексту (окна ~1500 слов, геометрическое усреднение вероятностей по каждому автору).</p>
+      <div class="ranking-strip" id="ranking-strip">
+        {% for r in sub.style_ranking %}
+        <span><b>{{ r.author }}</b> {{ r.pct }}%</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <p class="disclaimer" id="disclaimer-style">Подсветка в тексте ниже строится по более мелким фрагментам (~180 слов), поэтому это приближённая локализация — менее точная, чем общий процент выше.</p>
+  <p class="disclaimer" id="disclaimer-ai" style="display:none;">Оценка получена обученным классификатором (логистическая регрессия на TF-IDF + стилометрических признаках, точность на кросс-валидации ~95%) — не коммерческий детектор и не гарантия факта, а статистическая оценка. Источник для этой работы: <b>{{ sub.ai_source_label }}</b>. Расчёт полностью независим от анализа авторского стиля.</p>
+</div>
+
+<div class="card">
+  <div class="legend" id="legend-style">
+    <span><i class="green"></i> совпадает со стилем (80–100%)</span>
+    <span><i class="yellow"></i> частично совпадает (33–80%)</span>
+    <span><i class="red"></i> не соответствует стилю (0–33%)</span>
+  </div>
+  <div class="legend" id="legend-ai" style="display:none;">
+    <span><i class="green"></i> похоже на оригинальный текст</span>
+    <span><i class="yellow"></i> есть отдельные признаки ИИ</span>
+    <span><i class="red"></i> вероятно сгенерировано ИИ</span>
+  </div>
+  <div class="doc-panel" id="doc-panel" data-mode="style">
+    <div class="doc-text">{{ sub.doc_html|safe }}</div>
+  </div>
+</div>
+
+<div class="verdict-card">
+  <div class="stamp ok" id="verdict-stamp">{{ sub.style_stamp|safe }}</div>
+  <div>
+    <h3 id="verdict-title">Вердикт: авторский стиль</h3>
+    <p id="verdict-text">{{ sub.style_verdict }}</p>
+  </div>
+</div>
+
+<script>
+const data = {
+  style: {
+    pct: {{ sub.style_overall_pct }},
+    title: "Совпадение стиля с {{ sub.target_author_display }}",
+    desc: "Общий вердикт модели атрибуции по всему тексту (окна ~1500 слов, геометрическое усреднение вероятностей по каждому автору).",
+    verdictTitle: "Вердикт: авторский стиль",
+    verdictText: {{ sub.style_verdict|tojson }},
+    stampText: {{ sub.style_stamp|tojson }},
+    stampClass: {{ sub.style_stamp_class|tojson }},
+    color: "var(--style-accent)"
+  },
+  ai: {
+    pct: {{ sub.ai_overall_pct }},
+    title: "Индикатор вероятности ИИ-генерации",
+    desc: "Эвристическая оценка по тем же фрагментам текста, независимая от анализа авторского стиля — ориентир, а не доказательство.",
+    verdictTitle: "Вердикт: AI Detection",
+    verdictText: {{ sub.ai_verdict|tojson }},
+    stampText: {{ sub.ai_stamp|tojson }},
+    stampClass: {{ sub.ai_stamp_class|tojson }},
+    color: "var(--ai-accent)"
+  }
+};
+
+const CIRC = 2 * Math.PI * 62;
+const gaugeFill = document.getElementById('gauge-fill');
+const docPanel = document.getElementById('doc-panel');
+
+function setMode(mode) {
+  const d = data[mode];
+  document.getElementById('btn-style').classList.toggle('active', mode === 'style');
+  document.getElementById('btn-ai').classList.toggle('active', mode === 'ai');
+  document.getElementById('gauge-num').textContent = Math.round(d.pct);
+  gaugeFill.style.stroke = d.color;
+  const offset = CIRC * (1 - d.pct / 100);
+  gaugeFill.style.transition = 'stroke-dashoffset .5s ease, stroke .2s ease';
+  gaugeFill.setAttribute('stroke-dashoffset', offset);
+  document.getElementById('readout-title').textContent = d.title;
+  document.getElementById('readout-desc').textContent = d.desc;
+  document.getElementById('ranking-strip').style.display = (mode === 'style') ? 'flex' : 'none';
+  document.getElementById('disclaimer-style').style.display = (mode === 'style') ? 'block' : 'none';
+  document.getElementById('disclaimer-ai').style.display = (mode === 'ai') ? 'block' : 'none';
+  document.getElementById('legend-style').style.display = (mode === 'style') ? 'flex' : 'none';
+  document.getElementById('legend-ai').style.display = (mode === 'ai') ? 'flex' : 'none';
+
+  // Текст НЕ перерисовывается и не двигается - меняется только атрибут
+  // data-mode на панели, а какой цвет показывать каждому фрагменту,
+  // решает CSS (см. .doc-panel[data-mode=...] .frag[data-style/ai=...]).
+  docPanel.setAttribute('data-mode', mode);
+
+  document.getElementById('verdict-title').textContent = d.verdictTitle;
+  document.getElementById('verdict-text').textContent = d.verdictText;
+  const stamp = document.getElementById('verdict-stamp');
+  stamp.innerHTML = d.stampText;
+  stamp.className = 'stamp ' + d.stampClass;
+}
+
+setMode("{{ initial_mode }}");
+</script>
+{% endblock %}

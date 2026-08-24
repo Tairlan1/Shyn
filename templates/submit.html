@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Отправить работу — Shyndyq{% endblock %}
+{% block content %}
+<a class="link-back" href="{{ url_for('dashboard') }}">← Назад в кабинет</a>
+
+<div class="card card-pad" id="form-card">
+  <div class="eyebrow">Новая сдача</div>
+  <h1 class="page-title" style="font-size:26px;">Отправить работу</h1>
+  <p class="page-lede" style="margin-bottom:22px;">Shyndyq сравнит текст с эталонным стилем
+  предмета и проверит его на признаки ИИ-генерации.</p>
+
+  <div class="error-box" id="error-box"></div>
+
+  <div class="field">
+    <label for="title-input">Название работы (необязательно)</label>
+    <input type="text" id="title-input" placeholder="Например: «Эссе по литературе, вариант 3»">
+  </div>
+
+  <div class="field">
+    <label for="subject-select">Предмет</label>
+    <select id="subject-select">
+      {% for s in subjects %}
+      <option value="{{ s.code }}" {% if s.code == preselect %}selected{% endif %}>{{ s.code }} · {{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field">
+    <label>Файл работы</label>
+    <div id="file-drop" class="file-drop">Перетащите .docx, .pdf или .txt сюда или нажмите, чтобы выбрать</div>
+    <input type="file" id="file-input" accept=".docx,.pdf,.txt">
+    <div class="or-sep">или вставьте текст ниже</div>
+    <textarea id="text-input" placeholder="Вставьте текст на английском языке..."></textarea>
+  </div>
+
+  <button class="btn btn-primary" id="submit-btn">Сдать на проверку</button>
+</div>
+
+<div class="card processing-card" id="processing-card">
+  <div class="processing-ring"></div>
+  <p class="processing-stage" id="processing-stage">Загружаем работу...</p>
+  <p class="processing-sub">Shyndyq анализирует текст — это может занять пару минут</p>
+  <div class="processing-track"><div class="processing-fill" id="processing-fill"></div></div>
+  <div class="processing-steps" id="processing-steps"></div>
+</div>
+
+<script>
+const fileDrop = document.getElementById('file-drop');
+const fileInput = document.getElementById('file-input');
+const textInput = document.getElementById('text-input');
+const submitBtn = document.getElementById('submit-btn');
+const errorBox = document.getElementById('error-box');
+const formCard = document.getElementById('form-card');
+const processingCard = document.getElementById('processing-card');
+const stageEl = document.getElementById('processing-stage');
+const fillEl = document.getElementById('processing-fill');
+const stepsEl = document.getElementById('processing-steps');
+
+let selectedFile = null;
+
+fileDrop.addEventListener('click', () => fileInput.click());
+fileDrop.addEventListener('dragover', (e) => { e.preventDefault(); fileDrop.style.borderColor = '#1f6f6b'; });
+fileDrop.addEventListener('dragleave', () => { fileDrop.style.borderColor = ''; });
+fileDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) {
+    selectedFile = e.dataTransfer.files[0];
+    updateFileLabel();
+  }
+});
+fileInput.addEventListener('change', () => {
+  selectedFile = fileInput.files[0] || null;
+  updateFileLabel();
+});
+function updateFileLabel() {
+  if (selectedFile) {
+    fileDrop.textContent = 'Файл выбран: ' + selectedFile.name;
+    fileDrop.classList.add('has-file');
+  } else {
+    fileDrop.textContent = 'Перетащите .docx, .pdf или .txt сюда или нажмите, чтобы выбрать';
+    fileDrop.classList.remove('has-file');
+  }
+}
+
+// ---- staged "analysis" animation ----
+// Реальный анализ (в фоновом потоке на сервере) обычно занимает секунды,
+// но студенту показываем более длинную постановочную анимацию стадий,
+// чтобы честно передать сценарий "модель анализирует работу" - итог
+// показывается, как только готовы И анимация, И реальный результат.
+const STAGES = [
+  {label: 'Извлекаем текст из файла...', ms: 3500},
+  {label: 'Анализируем авторский стиль...', ms: 9000},
+  {label: 'Проверяем признаки ИИ-генерации...', ms: 7000},
+  {label: 'Формируем итоговый результат...', ms: 4000},
+];
+const TOTAL_MS = STAGES.reduce((s, x) => s + x.ms, 0);
+
+stepsEl.innerHTML = STAGES.map((s, i) => `<span id="step-${i}">${i + 1}</span>`).join('');
+
+let animDone = false;
+let jobDone = false;
+let jobRedirect = null;
+let jobError = null;
+
+function runAnimation() {
+  let elapsed = 0;
+  let stageIdx = 0;
+  stageEl.textContent = STAGES[0].label;
+  document.getElementById('step-0').classList.add('active');
+
+  const tick = setInterval(() => {
+    elapsed += 100;
+    fillEl.style.width = Math.min(100, (elapsed / TOTAL_MS) * 100) + '%';
+
+    let acc = 0;
+    for (let i = 0; i < STAGES.length; i++) {
+      acc += STAGES[i].ms;
+      if (elapsed < acc) {
+        if (i !== stageIdx) {
+          document.getElementById('step-' + stageIdx).classList.remove('active');
+          document.getElementById('step-' + stageIdx).classList.add('done');
+          stageIdx = i;
+          document.getElementById('step-' + stageIdx).classList.add('active');
+          stageEl.textContent = STAGES[i].label;
+        }
+        break;
+      }
+    }
+
+    if (elapsed >= TOTAL_MS) {
+      clearInterval(tick);
+      document.getElementById('step-' + stageIdx).classList.remove('active');
+      document.getElementById('step-' + stageIdx).classList.add('done');
+      animDone = true;
+      maybeFinish();
+    }
+  }, 100);
+}
+
+function maybeFinish() {
+  if (!animDone) return;
+  if (jobError) {
+    processingCard.classList.remove('visible');
+    formCard.style.display = 'block';
+    showError(jobError);
+    submitBtn.disabled = false;
+    return;
+  }
+  if (jobDone && jobRedirect) {
+    window.location.href = jobRedirect;
+  }
+}
+
+function pollJob(jobId) {
+  fetch('/job-status/' + jobId).then(r => r.json()).then(data => {
+    if (data.status === 'processing') {
+      setTimeout(() => pollJob(jobId), 1200);
+    } else if (data.status === 'done') {
+      jobDone = true;
+      jobRedirect = data.redirect;
+      maybeFinish();
+    } else {
+      jobError = data.error || 'Не удалось выполнить анализ.';
+      maybeFinish();
+    }
+  }).catch(() => setTimeout(() => pollJob(jobId), 1500));
+}
+
+submitBtn.addEventListener('click', async () => {
+  errorBox.style.display = 'none';
+  const subject = document.getElementById('subject-select').value;
+  const title = document.getElementById('title-input').value.trim();
+  const text = textInput.value.trim();
+
+  if (!selectedFile && !text) {
+    showError('Загрузите файл или вставьте текст.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('subject', subject);
+  formData.append('title', title);
+  if (selectedFile) {
+    formData.append('file', selectedFile);
+  } else {
+    formData.append('text', text);
+  }
+
+  submitBtn.disabled = true;
+  formCard.style.display = 'none';
+  processingCard.classList.add('visible');
+  animDone = false; jobDone = false; jobRedirect = null; jobError = null;
+  runAnimation();
+
+  try {
+    const resp = await fetch('/submit', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!resp.ok) {
+      jobError = data.error || 'Не удалось выполнить анализ.';
+      maybeFinish();
+      return;
+    }
+    pollJob(data.job_id);
+  } catch (e) {
+    jobError = 'Ошибка сети: ' + e.message;
+    maybeFinish();
+  }
+});
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.style.display = 'block';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Shyndyq{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="{{ url_for('dashboard') }}">
+      <span class="brand-mark">Shyndyq</span>
+      <span class="brand-sub">Авторский стиль &amp; ИИ-проверка</span>
+    </a>
+    <div class="user-chip"><span class="user-dot"></span> Тайлан С. · гр. ПИ-21</div>
+  </div>
+</div>
+<div class="shell">
+{% block content %}{% endblock %}
+</div>
+</body>
+</html>

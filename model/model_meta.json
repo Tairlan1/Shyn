@@ -1,0 +1,13 @@
+{
+  "authors": [
+    "ArthurConanDoyle",
+    "EdgarAllanPoe",
+    "H.G.Wells",
+    "JackLondon",
+    "MarkTwain"
+  ],
+  "n_chunks_trained_on": 2970,
+  "held_out_accuracy": 0.9473684210526315,
+  "held_out_macro_f1": 0.8802740675768723,
+  "target_words_per_chunk": "1450-1550 (см. preprocess_corpus.py)"
+}

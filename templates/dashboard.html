@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Личный кабинет — Shyndyq{% endblock %}
+{% block content %}
+<div class="eyebrow">Личный кабинет студента</div>
+<h1 class="page-title">Мои предметы</h1>
+<p class="page-lede">Выберите предмет и отправьте работу на проверку. Shyndyq оценит
+соответствие авторскому стилю и проверит текст на признаки ИИ-генерации.</p>
+
+<div class="subject-grid">
+  {% for s in subjects %}
+  <div class="subject-card">
+    <div class="subject-code">{{ s.code }}</div>
+    <div class="subject-name">{{ s.name }}</div>
+    <p class="subject-blurb">{{ s.blurb }}</p>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('submit_page', subject=s.code) }}">Отправить работу</a>
+  </div>
+  {% endfor %}
+</div>
+
+<h2 class="section-heading">Мои работы</h2>
+{% if submissions %}
+<table class="works-table">
+  <thead>
+    <tr>
+      <th>№</th>
+      <th>Файл</th>
+      <th>Shyndyq</th>
+      <th>AI</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in submissions %}
+    <tr id="work-{{ s.id }}">
+      <td class="work-id">{{ s.id }}</td>
+      <td>
+        <div class="work-title">{{ s.title }}</div>
+        <div class="work-subject">{{ s.subject_code }} · {{ s.subject_name }} · сдано {{ s.date }}</div>
+      </td>
+      <td>
+        <a class="tier-badge tier-{{ s.style_tier }}" href="{{ url_for('report', sub_id=s.id, mode='style') }}">
+          <span class="num">{{ s.style_overall_pct }}%</span>
+          <span class="lbl">Shyndyq</span>
+        </a>
+      </td>
+      <td>
+        <a class="tier-badge tier-{{ s.ai_tier }}" href="{{ url_for('report', sub_id=s.id, mode='ai') }}">
+          <span class="num">{{ s.ai_overall_pct }}%</span>
+          <span class="lbl">AI</span>
+        </a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="roll-empty">Пока нет сданных работ — выберите предмет выше и отправьте первую.</div>
+{% endif %}
+{% endblock %}

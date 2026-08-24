@@ -1,0 +1,15 @@
+{
+  "n_ai_examples": 70,
+  "n_human_examples": 84,
+  "human_sources": [
+    "brown",
+    "reuters",
+    "gutenberg",
+    "project_5author_corpus"
+  ],
+  "ai_source": "hand-authored by Claude across ~70 topics/registers",
+  "cv_accuracy": 0.9545,
+  "cv_roc_auc": 0.9781,
+  "target_chunk_words": 190,
+  "limitations": "AI class is single-model-authored (Claude); small dataset (~154 examples); cross-validation accuracy reflects this specific data distribution, not real-world student submissions. Not a substitute for professional commercial AI detectors."
+}
