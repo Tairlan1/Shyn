@@ -59,8 +59,38 @@ app = Flask(__name__)
 
 PIPELINE = None
 LABEL_ENCODER = None
+OOD_DETECTOR = None  # None = модель без novelty-детектора (старые артефакты)
 MODEL_DIR = Path("./model")
 PROJECT_DIR = Path(__file__).parent
+
+# Пороги цветовой классификации (в процентах) - раздельно для стиля и AI
+# Detection, т.к. у них РАЗНАЯ цена ошибки: заниженный Shyndyq % просто
+# менее интересен, а ложный красный AI-вердикт на честной работе - серьёзное
+# обвинение. Поэтому AI-порог красного заметно консервативнее (90, а не 80).
+BAND_RED_MAX = 33.0
+BAND_GREEN_MIN = 80.0
+
+AI_BAND_RED_MAX = 25.0
+AI_BAND_GREEN_MIN = 90.0
+
+# Размер окна для подсветки фрагментов (компромисс между точностью модели,
+# обученной на ~1500-словных окнах, и желаемой гранулярностью подсветки).
+WINDOW_TARGET_WORDS = 180
+WINDOW_MIN_WORDS = 60
+
+# Ниже этого novelty% стилевая атрибуция считалась бы недостоверной вне
+# зависимости от % совпадения с целевым автором - см. train_model.novelty_pct_scores().
+NOVELTY_UNRELIABLE_MAX = 35.0
+
+# ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ. Density-based novelty-детектор эмпирически
+# проверен на небольшой выборке реальных данных проекта и показал, что
+# может занижать novelty% для подлинного, стилево яркого текста человека
+# сильнее, чем для сглаженного ИИ-текста - т.е. способен работать в опасную
+# для честного студента сторону. Включайте только после того, как
+# validate_novelty_detector.py (см. отдельный скрипт) на ПОЛНОМ корпусе
+# и реальных примерах ИИ-текста покажет, что человеческий held-out текст
+# стабильно получает более высокий novelty%, чем ИИ-текст.
+NOVELTY_GATING_ENABLED = False
 
 AUTHOR_DISPLAY_NAMES = {
     "ArthurConanDoyle": "Arthur Conan Doyle",
@@ -93,16 +123,6 @@ SUBJECTS = [
 ]
 SUBJECTS_BY_CODE = {s["code"]: s for s in SUBJECTS}
 
-WINDOW_TARGET_WORDS = 180   # размер окна для подсветки фрагментов (компромисс
-                             # между точностью модели, обученной на ~1500-словных
-                             # окнах, и желаемой гранулярностью подсветки)
-WINDOW_MIN_WORDS = 60
-
-# Пороги цветовой классификации (в процентах) - единые для всей платформы:
-# 0-33 красный / 33.01-79.99 жёлтый / 80-100 зелёный.
-BAND_RED_MAX = 33.0
-BAND_GREEN_MIN = 80.0
-
 
 def tier_of(pct: float) -> str:
     if pct <= BAND_RED_MAX:
@@ -115,11 +135,13 @@ def tier_of(pct: float) -> str:
 def _ai_tier(ai_pct: float) -> str:
     """Для AI% семантика цвета обратная относительно 'соответствия стилю':
     низкий AI% - хорошо (зелёный/оригинальный текст), высокий - тревожно
-    (красный/вероятно ИИ). Используем те же границы 33/80 для единого
-    визуального языка платформы."""
-    if ai_pct >= BAND_GREEN_MIN:
+    (красный/вероятно ИИ). Пороги здесь СВОИ (AI_BAND_*), отдельные от
+    порогов совпадения стиля - у ложного обвинения в ИИ намного выше цена
+    ошибки, чем у заниженного Shyndyq %, поэтому по умолчанию AI-порог
+    красного заметно консервативнее (см. config.ini)."""
+    if ai_pct >= AI_BAND_GREEN_MIN:
         return "red"
-    if ai_pct <= BAND_RED_MAX:
+    if ai_pct <= AI_BAND_RED_MAX:
         return "green"
     return "yellow"
 
@@ -252,6 +274,17 @@ def analyze_text(raw_text: str, target_author: str) -> dict:
     for i, w in enumerate(windows):
         w["style_score"] = float(proba[i][target_idx])
 
+    # --- независимый расчёт №1b: детектор "вне распределения" (novelty) ---
+    # Отвечает не "какой автор ближе", а "похож ли текст вообще на корпус,
+    # на котором обучалась стилевая модель" - см. train_model.py. Если
+    # OOD_DETECTOR отсутствует (старая модель без ood_novelty.joblib),
+    # window_novelty будет None и весь дальнейший код должен это учитывать.
+    window_novelty = None
+    if OOD_DETECTOR is not None:
+        window_novelty = train_model.novelty_pct_scores(window_texts, PIPELINE, OOD_DETECTOR)
+        for i, w in enumerate(windows):
+            w["novelty_pct"] = round(float(window_novelty[i]), 1)
+
     # --- независимый расчёт №2: обученный классификатор "человек/ИИ",
     #     с откатом на эвристику для слишком коротких фрагментов или если
     #     модель не обучена (см. train_ai_detector.py) ---
@@ -277,6 +310,21 @@ def analyze_text(raw_text: str, target_author: str) -> dict:
 
     doc_html = render_dual_highlight_html(raw_text, windows)
 
+    novelty_pct = doc_result.get("novelty_pct")  # None, если модель без OOD-детектора
+    # ВАЖНО: novelty_pct пока НЕ используется для автоматического понижения
+    # вердикта (см. NOVELTY_GATING_ENABLED ниже) - эмпирическая проверка на
+    # реальных текстах показала, что density-based детектор в текущей
+    # реализации может ошибаться в опасную сторону: подлинный, но стилево
+    # яркий текст человека получает БОЛЕЕ высокий сигнал "аномальности", чем
+    # сглаженный ИИ-текст, который как раз статистически ближе к "среднему"
+    # по корпусу. Автоматически понижать вердикт студента по такому сигналу
+    # без валидации на полном корпусе - неприемлемый риск. Значение всё
+    # равно считается и показывается (для информации/ручной проверки), но
+    # ЕДИНСТВЕННЫЙ сигнал, который сейчас автоматически шлюзует вердикт -
+    # это обученный AI-детектор (ai_tier), который такую проверку прошёл.
+    style_reliable = (not NOVELTY_GATING_ENABLED) or novelty_pct is None \
+        or novelty_pct >= NOVELTY_UNRELIABLE_MAX
+
     return {
         "target_author": target_author,
         "target_author_display": AUTHOR_DISPLAY_NAMES.get(target_author, target_author),
@@ -290,6 +338,8 @@ def analyze_text(raw_text: str, target_author: str) -> dict:
              "pct": round(r["probability"] * 100, 1)}
             for r in doc_result["ranking"]
         ],
+        "novelty_pct": novelty_pct,
+        "style_reliable": style_reliable,
         "ai_overall_pct": round(ai_overall * 100, 1),
         "ai_tier": _ai_tier(round(ai_overall * 100, 1)),
         "ai_source_label": ai_source_label,
@@ -304,7 +354,31 @@ def analyze_text(raw_text: str, target_author: str) -> dict:
 # =============================================================================
 
 def style_verdict_text(style_pct: float, tier: str, target_display: str,
-                        top_author_display: str, matches_top: bool) -> tuple[str, str, str]:
+                        top_author_display: str, matches_top: bool,
+                        ai_tier: str = "green", novelty_pct: float | None = None,
+                        style_reliable: bool = True) -> tuple[str, str, str]:
+    """Вердикт по авторскому стилю - но теперь НЕ полностью независимый от
+    двух других сигналов (AI% и novelty%). Раньше высокий style_pct мог
+    показываться как "совпадение" даже для явно ИИ-сгенерированного или
+    статистически аномального текста - см. историю проблемы. Правило
+    приоритета: если ai_tier=="red" (детектор ИИ уверен) ИЛИ style_reliable
+    == False (текст вне распределения обучающего корпуса - см.
+    train_model.novelty_pct_scores), то raw style_pct не показывается как
+    значимое совпадение, каким бы высоким он ни был - потому что вычислен
+    на признаках, которые в этом случае ничего не доказывают."""
+    if ai_tier == "red":
+        text = (f"Текст с высокой вероятностью сгенерирован ИИ (см. вкладку "
+                f"AI Detection). Совпадение стиля с {target_display} в этом "
+                f"случае неинформативно и не может расцениваться как "
+                f"подтверждение авторства, даже если процент совпадения выше.")
+        return text, "СТИЛЬ<br>НЕДОСТОВЕРЕН", "bad"
+    if not style_reliable:
+        text = (f"Текст статистически нетипичен для корпуса, на котором "
+                f"обучалась модель (novelty {novelty_pct:.0f}%) - он не похож "
+                f"ни на одного из пяти эталонных авторов настолько, чтобы "
+                f"атрибуции можно было доверять. Сравнение с {target_display} "
+                f"в данном случае недостоверно; рекомендуется ручная проверка.")
+        return text, "СТИЛЬ<br>НЕДОСТОВЕРЕН", "bad"
     if tier == "green":
         text = (f"Стиль текста с высокой уверенностью совпадает с работами "
                 f"{target_display} — модель уверенно относит документ к этому автору "
@@ -355,7 +429,10 @@ def make_submission(title: str, subject_code: str, raw_text: str,
         result["style_overall_pct"], result["style_tier"],
         result["target_author_display"],
         result["style_predicted_author_display"],
-        result["style_predicted_author"] == result["target_author"])
+        result["style_predicted_author"] == result["target_author"],
+        ai_tier=result["ai_tier"],
+        novelty_pct=result["novelty_pct"],
+        style_reliable=result["style_reliable"])
     ai_v, ai_stamp, ai_stamp_cls = ai_verdict_text(
         result["ai_overall_pct"], result["ai_tier"])
 
@@ -532,7 +609,7 @@ def report(sub_id: int):
 
 
 def main():
-    global PIPELINE, LABEL_ENCODER, MODEL_DIR
+    global PIPELINE, LABEL_ENCODER, OOD_DETECTOR, MODEL_DIR
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", type=Path, default=Path("./model"))
     ap.add_argument("--host", default="127.0.0.1")
@@ -541,8 +618,17 @@ def main():
     args = ap.parse_args()
 
     MODEL_DIR = args.model_dir
+    print(f"Пороги стиля: red_max={BAND_RED_MAX} / green_min={BAND_GREEN_MIN}")
+    print(f"Пороги AI Detection: red_max={AI_BAND_RED_MAX} / green_min={AI_BAND_GREEN_MIN}")
     print(f"Загрузка модели из {MODEL_DIR} ...")
     PIPELINE, LABEL_ENCODER = load_model(MODEL_DIR)
+    OOD_DETECTOR = train_model.load_ood_detector(MODEL_DIR)
+    if OOD_DETECTOR is None:
+        print("ВНИМАНИЕ: ood_novelty.joblib не найден - детектор новизны "
+              "отключён, style-вердикт шлюзуется только по AI%. "
+              "Переобучите модель (train_model.py train), чтобы получить "
+              "также защиту от статистически аномального (не только "
+              "ИИ-специфичного) текста.")
     print(f"Готово. Авторы: {list(LABEL_ENCODER.classes_)}")
     print("Готовлю демонстрационные работы...")
     seed_demo_submissions()

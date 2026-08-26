@@ -54,7 +54,8 @@ import numpy as np
 from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.decomposition import TruncatedSVD
+from sklearn.ensemble import IsolationForest, RandomForestClassifier, StackingClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.metrics import (accuracy_score, classification_report,
@@ -76,6 +77,19 @@ warnings.filterwarnings("ignore", category=UserWarning)
 MODEL_FILE = "author_style_pipeline.joblib"
 LABELS_FILE = "label_encoder.joblib"
 META_FILE = "model_meta.json"
+OOD_FILE = "ood_novelty.joblib"
+
+# Сколько компонент оставляем при снижении размерности признакового
+# пространства (char/word TF-IDF + стилометрия) перед детектором новизны -
+# полная TF-IDF-матрица (десятки тысяч признаков) для IsolationForest
+# избыточна и шумна, урезанное плотное представление ловит "форму"
+# распределения обучающих авторов гораздо надёжнее.
+OOD_SVD_COMPONENTS = 100
+# Доля обучающих чанков, которую IsolationForest вправе счесть выбросами
+# ВНУТРИ самого обучающего корпуса (шумные/нетипичные чанки у настоящих
+# авторов тоже бывают) - не путать с порогом принятия решения на инференсе,
+# который считается отдельно через перцентили (см. train()).
+OOD_CONTAMINATION = 0.02
 
 
 # =============================================================================
@@ -420,12 +434,80 @@ def train(data_path: Path, model_dir: Path, cv_folds: int = 5,
     model_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(production_pipeline, model_dir / MODEL_FILE)
     joblib.dump(le, model_dir / LABELS_FILE)
+
+    # ---- Детектор "вне распределения" (novelty) ----
+    # ВАЖНО: это НЕ 6-й класс "ИИ" и не переобучение под конкретные LLM.
+    # Модель атрибуции авторства (StackingClassifier) - closed-set: она
+    # обязана нормализовать вероятность в 100% среди 5 известных авторов,
+    # даже если реальный текст не похож ни на одного из них (см. discussion
+    # в app.py). Детектор ниже решает другую, дополняющую задачу: "насколько
+    # признаковый вектор этого текста вообще типичен для обучающего корпуса
+    # (человеческая англоязычная художественная проза XIX века) как единого
+    # целого?" - без привязки к тому, какой из пяти авторов ближе. Низкий
+    # результат означает, что top-1 атрибуция недостоверна ПО ЛЮБОЙ причине:
+    # ИИ-генерация, машинный перевод, нехудожественный текст, плагиат из
+    # неизвестного источника и т.п. - детектор не привязан к стилю каких-то
+    # конкретных LLM и не устаревает так, как устарел бы явный "класс ИИ".
+    #
+    # КАЛИБРОВКА ПОРОГА - КРИТИЧЕСКИ ВАЖНАЯ ЧАСТЬ. IsolationForest, оценённый
+    # на тех же данных, на которых он обучался, систематически завышает
+    # "нормальность" этих данных (лес буквально видел эти точки при
+    # построении разбиений) - наивная калибровка на train-скорах даёт
+    # обманчиво узкий диапазон и ложные срабатывания на ЛЮБОМ новом тексте,
+    # включая настоящие работы человека. Поэтому перцентили (p01/p50) здесь
+    # считаются на честных out-of-fold оценках (GroupKFold по книгам - как
+    # и при оценке качества классификатора выше): каждый чанк оценивается
+    # лесом, который его не видел. Итоговый "боевой" лес для продакшна при
+    # этом всё равно обучается на 100% данных - для максимального охвата.
+    print("\nОбучение и калибровка детектора 'вне распределения' (novelty)...")
+    feat_matrix = production_pipeline.named_steps["features"].transform(texts)
+    n_components = min(OOD_SVD_COMPONENTS, feat_matrix.shape[1] - 1, max(feat_matrix.shape[0] - 1, 1))
+    svd = TruncatedSVD(n_components=n_components, random_state=random_state)
+    reduced_all = svd.fit_transform(feat_matrix)
+
+    n_splits_ood = min(5, n_groups) if n_groups >= 2 else 0
+    oof_scores = np.full(len(texts), np.nan)
+    if n_splits_ood >= 2:
+        gkf_ood = GroupKFold(n_splits=n_splits_ood)
+        for fold_i, (tr_i, va_i) in enumerate(gkf_ood.split(reduced_all, y, groups=groups)):
+            iso_fold = IsolationForest(n_estimators=300, contamination=OOD_CONTAMINATION,
+                                        random_state=random_state, n_jobs=-1)
+            iso_fold.fit(reduced_all[tr_i])
+            oof_scores[va_i] = iso_fold.score_samples(reduced_all[va_i])
+            print(f"  novelty-калибровка, фолд {fold_i + 1}/{n_splits_ood}: готово")
+
+    valid_mask = ~np.isnan(oof_scores)
+    if valid_mask.sum() >= 20:
+        p01, p50 = (float(v) for v in np.percentile(oof_scores[valid_mask], [1, 50]))
+    else:
+        # Слишком мало данных/групп для честного out-of-fold - откатываемся
+        # на in-sample калибровку с явным предупреждением; НЕ для продакшна
+        # с малыми корпусами без ручной перепроверки порога.
+        print("  ВНИМАНИЕ: недостаточно данных для честной out-of-fold "
+              "калибровки novelty (< 20 валидных оценок) - используется "
+              "оптимистичная in-sample калибровка, порог требует ручной "
+              "проверки перед использованием в проде.")
+        iso_probe = IsolationForest(n_estimators=300, contamination=OOD_CONTAMINATION,
+                                     random_state=random_state, n_jobs=-1).fit(reduced_all)
+        p01, p50 = (float(v) for v in np.percentile(iso_probe.score_samples(reduced_all), [1, 50]))
+
+    # Финальный "боевой" лес - на 100% данных, для максимального охвата в проде.
+    iso = IsolationForest(n_estimators=300, contamination=OOD_CONTAMINATION,
+                           random_state=random_state, n_jobs=-1)
+    iso.fit(reduced_all)
+
+    joblib.dump({"svd": svd, "iso": iso, "p01": p01, "p50": p50}, model_dir / OOD_FILE)
+    print(f"Novelty-детектор сохранён: {model_dir / OOD_FILE} "
+          f"(honest out-of-fold p01={p01:.4f}, p50={p50:.4f}, компонент SVD={n_components}, "
+          f"валидных oof-оценок={int(valid_mask.sum())}/{len(texts)})")
+
     meta = {
         "authors": list(le.classes_),
         "n_chunks_trained_on": n,
         "held_out_accuracy": float(acc) if len(X_test) else None,
         "held_out_macro_f1": float(f1) if len(X_test) else None,
         "target_words_per_chunk": "1450-1550 (см. preprocess_corpus.py)",
+        "ood_detector": "IsolationForest поверх TruncatedSVD(features), см. ood_novelty.joblib",
     }
     (model_dir / META_FILE).write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                         encoding="utf-8")
@@ -443,6 +525,38 @@ def load_model(model_dir: Path):
     return pipeline, le
 
 
+def load_ood_detector(model_dir: Path) -> dict | None:
+    """Возвращает детектор новизны (svd + isolation forest + перцентили
+    train-корпуса) или None, если модель обучена до появления этой фичи и
+    ood_novelty.joblib отсутствует - в этом случае весь код выше по стеку
+    должен продолжать работать, просто без сигнала новизны (обратная
+    совместимость со старыми артефактами модели)."""
+    path = model_dir / OOD_FILE
+    if not path.exists():
+        return None
+    return joblib.load(path)
+
+
+def novelty_pct_scores(chunk_texts: list[str], pipeline, ood: dict) -> np.ndarray:
+    """Для каждого чанка считает 0-100%: насколько его признаковый вектор
+    типичен для обучающего корпуса пяти авторов В ЦЕЛОМ (не для конкретного
+    автора). Это НЕ вероятность и не альтернатива style_score - это
+    независимая проверка достоверности самой стилевой атрибуции. Низкий %
+    означает: top-1 автор из ranking, каким бы высоким ни был его
+    относительный процент, не стоит доверять - текст лежит вне того, на чём
+    вообще обучалась модель."""
+    feat_matrix = pipeline.named_steps["features"].transform(chunk_texts)
+    reduced = ood["svd"].transform(feat_matrix)
+    raw = ood["iso"].score_samples(reduced)  # выше = типичнее для train-корпуса
+    p01, p50 = ood["p01"], ood["p50"]
+    span = max(p50 - p01, 1e-6)
+    # Линейная шкала: p01 обучающей выборки -> ~0%, p50 -> ~70%; специально
+    # не растягиваем до 100% на p50, чтобы даже "типичный" человеческий
+    # чанк не выглядел как абсолютная гарантия - клип сверху всё равно есть.
+    pct = 70.0 * (raw - p01) / span
+    return np.clip(pct, 0.0, 100.0)
+
+
 def predict_author(text: str, model_dir: Path,
                     chunk_cfg: prep.ChunkingConfig | None = None) -> dict:
     """Определяет автора произвольного (неизвестного) текста.
@@ -454,6 +568,7 @@ def predict_author(text: str, model_dir: Path,
     по всему тексту - это надёжнее, чем решение по одному окну.
     """
     pipeline, le = load_model(model_dir)
+    ood = load_ood_detector(model_dir)
     cfg = chunk_cfg or prep.ChunkingConfig()
 
     cleaned = prep.clean_raw_text(text)
@@ -476,16 +591,23 @@ def predict_author(text: str, model_dir: Path,
         for i in order
     ]
 
+    chunk_novelty = novelty_pct_scores(chunk_texts, pipeline, ood) if ood is not None else None
+
     per_chunk = []
     for i, ct in enumerate(chunk_texts):
         p = proba[i]
         top = int(np.argmax(p))
-        per_chunk.append({
+        entry = {
             "chunk_id": i,
             "word_count": chunks[i]["word_count"],
             "predicted_author": le.classes_[top],
             "confidence": round(float(p[top]), 4),
-        })
+        }
+        if chunk_novelty is not None:
+            entry["novelty_pct"] = round(float(chunk_novelty[i]), 1)
+        per_chunk.append(entry)
+
+    novelty_pct = float(np.mean(chunk_novelty)) if chunk_novelty is not None else None
 
     return {
         "predicted_author": ranked[0]["author"],
@@ -493,6 +615,10 @@ def predict_author(text: str, model_dir: Path,
         "ranking": ranked,
         "n_chunks_analyzed": len(chunk_texts),
         "per_chunk_predictions": per_chunk,
+        # None означает "модель обучена без детектора новизны" (старые
+        # артефакты) - вызывающий код должен трактовать это как "сигнал
+        # недоступен", а НЕ как "текст типичен".
+        "novelty_pct": round(novelty_pct, 1) if novelty_pct is not None else None,
     }
 
 
@@ -539,8 +665,12 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print(f"\nПредсказанный автор: {result['predicted_author']} "
                   f"(уверенность {result['confidence']*100:.1f}%)")
-            print(f"Проанализировано окон: {result['n_chunks_analyzed']}\n")
-            print("Полное распределение вероятностей по авторам:")
+            print(f"Проанализировано окон: {result['n_chunks_analyzed']}")
+            if result["novelty_pct"] is not None:
+                print(f"Типичность для обучающего корпуса (novelty): "
+                      f"{result['novelty_pct']:.1f}% "
+                      f"{'-- ВНЕ РАСПРЕДЕЛЕНИЯ, атрибуции ниже доверять нельзя' if result['novelty_pct'] < 35 else ''}")
+            print("\nПолное распределение вероятностей по авторам:")
             for r in result["ranking"]:
                 bar = "#" * int(r["probability"] * 40)
                 print(f"  {r['author']:<20} {r['probability']*100:6.2f}%  {bar}")

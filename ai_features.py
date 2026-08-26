@@ -28,9 +28,11 @@ class SurfaceFeaturizer(BaseEstimator, TransformerMixin):
 
     FEATURE_NAMES = [
         "lexicon_signal", "discourse_signal", "list_of_three_signal",
-        "uniformity_signal", "avg_sentence_len", "std_sentence_len",
+        "uniformity_signal", "paragraph_uniformity_signal",
+        "structural_markup_signal", "avg_sentence_len", "std_sentence_len",
         "avg_word_len", "type_token_ratio", "comma_per_100w",
         "semicolon_per_100w", "contraction_per_100w", "first_person_per_100w",
+        "em_dash_per_100w",
     ]
 
     def fit(self, X, y=None):
@@ -60,12 +62,17 @@ class SurfaceFeaturizer(BaseEstimator, TransformerMixin):
         semis = text.count(";")
         contractions = len(re.findall(r"\b\w+'(?:t|re|ve|ll|d|s|m)\b", text, re.IGNORECASE))
         first_person = len(re.findall(r"\b(I|me|my|mine|we|us|our)\b", text))
+        # Тире (em dash, "—"/"--") - задокументированный кросс-моделный
+        # "tell" LLM-текста, не завязанный на конкретный лексикон.
+        em_dashes = text.count("—") + len(re.findall(r"(?<!-)--(?!-)", text))
 
         return [
             ah["lexicon_signal"],
             ah["discourse_signal"],
             ah["list_of_three_signal"],
             ah["uniformity_signal"],
+            ah["paragraph_uniformity_signal"],
+            ah["structural_markup_signal"],
             avg_sent_len,
             std_sent_len,
             avg_word_len,
@@ -74,4 +81,5 @@ class SurfaceFeaturizer(BaseEstimator, TransformerMixin):
             100.0 * semis / n_words,
             100.0 * contractions / n_words,
             100.0 * first_person / n_words,
+            100.0 * em_dashes / n_words,
         ]

@@ -10,12 +10,29 @@
     <div class="report-meta">Сдано {{ sub.date }} · {{ sub.n_words }} слов · {{ sub.n_windows }} фрагментов проанализировано</div>
   </div>
   <div class="segtoggle">
-    <button class="seg-btn mode-style" id="btn-style" onclick="setMode('style')">Авторский стиль · {{ sub.style_overall_pct }}%</button>
+    <button class="seg-btn mode-style" id="btn-style" onclick="setMode('style')">Авторский стиль · {% if sub.ai_tier == 'red' %}Н/Д{% else %}{{ sub.style_overall_pct }}%{% endif %}</button>
     <button class="seg-btn mode-ai" id="btn-ai" onclick="setMode('ai')">AI Detection · {{ sub.ai_overall_pct }}%</button>
   </div>
 </div>
 
 <div class="card" style="margin-bottom:20px;">
+  {% if sub.ai_tier == 'red' %}
+  <div class="mismatch-alert">
+    <div class="icon">⚠️</div>
+    <div class="text">
+      <b>Текст категорически не относится к стилю {{ sub.target_author_display }}</b>
+      <span>С высокой вероятностью текст сгенерирован ИИ (AI Detection: {{ sub.ai_overall_pct }}%). Любое числовое совпадение стиля в этом случае недостоверно и не должно рассматриваться как признак подлинности работы.</span>
+    </div>
+  </div>
+  {% elif sub.ai_tier == 'yellow' %}
+  <div class="mismatch-alert soft">
+    <div class="icon">ℹ️</div>
+    <div class="text">
+      <b>Есть основания присмотреться внимательнее</b>
+      <span>Обнаружены отдельные признаки, которые иногда встречаются в ИИ-тексте (AI Detection: {{ sub.ai_overall_pct }}%), но однозначного вывода это не даёт. Это не доказательство и не повод для обвинения — рекомендуется, чтобы преподаватель сам просмотрел отмеченные фрагменты во вкладке AI Detection.</span>
+    </div>
+  </div>
+  {% endif %}
   <div class="readout">
     <div class="gauge-wrap">
       <svg viewBox="0 0 148 148" width="148" height="148">
@@ -26,36 +43,47 @@
                 transform="rotate(-90 74 74)"/>
       </svg>
       <div class="gauge-num">
-        <span class="n" id="gauge-num">{{ sub.style_overall_pct }}</span>
-        <span class="u">%</span>
+        <span class="n" id="gauge-num">{% if sub.ai_tier == 'red' %}Н/Д{% else %}{{ sub.style_overall_pct }}{% endif %}</span>
+        <span class="u">{% if sub.ai_tier != 'red' %}%{% endif %}</span>
       </div>
     </div>
     <div class="readout-copy">
       <h2 id="readout-title">Совпадение стиля с {{ sub.target_author_display }}</h2>
-      <p id="readout-desc">Общий вердикт модели атрибуции по всему тексту (окна ~1500 слов, геометрическое усреднение вероятностей по каждому автору).</p>
-      <div class="ranking-strip" id="ranking-strip">
-        {% for r in sub.style_ranking %}
-        <span><b>{{ r.author }}</b> {{ r.pct }}%</span>
-        {% endfor %}
-      </div>
+      {% if sub.ai_tier == 'red' %}
+      <p id="readout-desc"><b>Процент не показывается.</b> Текст с высокой вероятностью сгенерирован ИИ (AI Detection: {{ sub.ai_overall_pct }}%) — модель атрибуции стиля обязана выбрать ближайшего из 5 известных авторов даже для текста, не написанного ни одним из них, поэтому в этом случае процент совпадения не несёт значимой информации и не рассчитывается для отображения.</p>
+      {% else %}
+      <p id="readout-desc">Насколько стиль работы близок к стилю {{ sub.target_author_display }} по модели атрибуции (окна ~1500 слов, геометрическое усреднение вероятностей).{% if not sub.style_reliable %} <b>См. предупреждение ниже — этот процент в данном случае недостоверен.</b>{% endif %}</p>
+      {% endif %}
+      <div class="ranking-strip" id="ranking-strip"></div>
     </div>
   </div>
-  <p class="disclaimer" id="disclaimer-style">Подсветка в тексте ниже строится по более мелким фрагментам (~180 слов), поэтому это приближённая локализация — менее точная, чем общий процент выше.</p>
+  <p class="disclaimer" id="disclaimer-style">Подсветка в тексте ниже строится по более мелким фрагментам (~180 слов), поэтому это приближённая локализация — менее точная, чем общий процент выше.
+    {% if sub.novelty_pct is not none %}
+      Экспериментальный индикатор типичности текста для обучающего корпуса (novelty): <b>{{ sub.novelty_pct }}%</b> — пока не откалиброван на полном корпусе и НЕ влияет на вердикт ниже; ориентируйтесь в первую очередь на AI Detection.
+      {% if not sub.style_reliable %}
+        <b>Ниже порога надёжности — процент совпадения стиля выше не считается достоверным независимо от его значения.</b>
+      {% endif %}
+    {% endif %}
+  </p>
   <p class="disclaimer" id="disclaimer-ai" style="display:none;">Оценка получена обученным классификатором (логистическая регрессия на TF-IDF + стилометрических признаках, точность на кросс-валидации ~95%) — не коммерческий детектор и не гарантия факта, а статистическая оценка. Источник для этой работы: <b>{{ sub.ai_source_label }}</b>. Расчёт полностью независим от анализа авторского стиля.</p>
 </div>
 
 <div class="card">
   <div class="legend" id="legend-style">
+    {% if sub.ai_tier == 'red' %}
+    <span><i style="background:var(--rule-strong)"></i> подсветка стиля отключена — текст с высокой вероятностью сгенерирован ИИ, посегментное сравнение со стилем автора недостоверно</span>
+    {% else %}
     <span><i class="green"></i> совпадает со стилем (80–100%)</span>
     <span><i class="yellow"></i> частично совпадает (33–80%)</span>
     <span><i class="red"></i> не соответствует стилю (0–33%)</span>
+    {% endif %}
   </div>
   <div class="legend" id="legend-ai" style="display:none;">
     <span><i class="green"></i> похоже на оригинальный текст</span>
     <span><i class="yellow"></i> есть отдельные признаки ИИ</span>
     <span><i class="red"></i> вероятно сгенерировано ИИ</span>
   </div>
-  <div class="doc-panel" id="doc-panel" data-mode="style">
+  <div class="doc-panel" id="doc-panel" data-mode="style" data-style-disabled="{{ 'true' if sub.ai_tier == 'red' else 'false' }}">
     <div class="doc-text">{{ sub.doc_html|safe }}</div>
   </div>
 </div>
@@ -72,6 +100,7 @@
 const data = {
   style: {
     pct: {{ sub.style_overall_pct }},
+    hideNumber: {{ 'true' if sub.ai_tier == 'red' else 'false' }},
     title: "Совпадение стиля с {{ sub.target_author_display }}",
     desc: "Общий вердикт модели атрибуции по всему тексту (окна ~1500 слов, геометрическое усреднение вероятностей по каждому автору).",
     verdictTitle: "Вердикт: авторский стиль",
@@ -98,11 +127,12 @@ const docPanel = document.getElementById('doc-panel');
 
 function setMode(mode) {
   const d = data[mode];
+  const hideNumber = d.hideNumber === true;  // AI-режим не имеет этого поля - всегда false
   document.getElementById('btn-style').classList.toggle('active', mode === 'style');
   document.getElementById('btn-ai').classList.toggle('active', mode === 'ai');
-  document.getElementById('gauge-num').textContent = Math.round(d.pct);
+  document.getElementById('gauge-num').textContent = hideNumber ? 'Н/Д' : Math.round(d.pct);
   gaugeFill.style.stroke = d.color;
-  const offset = CIRC * (1 - d.pct / 100);
+  const offset = CIRC * (1 - (hideNumber ? 0 : d.pct) / 100);
   gaugeFill.style.transition = 'stroke-dashoffset .5s ease, stroke .2s ease';
   gaugeFill.setAttribute('stroke-dashoffset', offset);
   document.getElementById('readout-title').textContent = d.title;

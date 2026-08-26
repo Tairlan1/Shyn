@@ -38,7 +38,7 @@
       </td>
       <td>
         <a class="tier-badge tier-{{ s.style_tier }}" href="{{ url_for('report', sub_id=s.id, mode='style') }}">
-          <span class="num">{{ s.style_overall_pct }}%</span>
+          <span class="num">{% if s.ai_tier == 'red' %}Н/Д{% else %}{{ s.style_overall_pct }}%{% endif %}</span>
           <span class="lbl">Shyndyq</span>
         </a>
       </td>

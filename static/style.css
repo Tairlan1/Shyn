@@ -655,6 +655,15 @@ input[type=file] { display: none; }
 .doc-panel[data-mode="style"] .frag[data-style="green"] { background: var(--tier-green-soft); box-shadow: inset 0 -2px 0 var(--tier-green); }
 .doc-panel[data-mode="style"] .frag[data-style="yellow"] { background: var(--tier-yellow-soft); box-shadow: inset 0 -2px 0 var(--tier-yellow); }
 .doc-panel[data-mode="style"] .frag[data-style="red"] { background: var(--tier-red-soft); box-shadow: inset 0 -2px 0 var(--tier-red); }
+/* Когда AI Detection красный, посегментная подсветка стиля не несёт смысла
+   (см. mismatch-alert выше) - гасим все три цвета до нейтрального, вместо
+   того чтобы молча продолжать рисовать зелёный/жёлтый/красный по фрагментам,
+   как будто вердикт не изменился. */
+.doc-panel[data-mode="style"][data-style-disabled="true"] .frag[data-style] {
+  background: var(--rule) !important;
+  box-shadow: inset 0 -2px 0 var(--rule-strong) !important;
+  opacity: .75;
+}
 .doc-panel[data-mode="ai"] .frag[data-ai="green"] { background: var(--tier-green-soft); box-shadow: inset 0 -2px 0 var(--tier-green); }
 .doc-panel[data-mode="ai"] .frag[data-ai="yellow"] { background: var(--tier-yellow-soft); box-shadow: inset 0 -2px 0 var(--tier-yellow); }
 .doc-panel[data-mode="ai"] .frag[data-ai="red"] { background: var(--tier-red-soft); box-shadow: inset 0 -2px 0 var(--tier-red); }
@@ -675,4 +684,44 @@ input[type=file] { display: none; }
 .legend i.red { background: var(--tier-red); }
 
 .stamp.bad { color: var(--tier-red); }
+
+.mismatch-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 26px 20px;
+  padding: 16px 18px;
+  border: 2px solid var(--tier-red);
+  border-radius: 10px;
+  background: var(--tier-red-soft);
+  animation: alert-pulse 1.8s ease-in-out infinite;
+}
+.mismatch-alert .icon {
+  font-size: 22px;
+  line-height: 1;
+  flex: none;
+}
+.mismatch-alert .text b {
+  color: var(--tier-red);
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  display: block;
+  margin-bottom: 4px;
+}
+.mismatch-alert .text span { color: var(--ink); font-size: 14px; line-height: 1.45; }
+@keyframes alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(163,49,63,.35); }
+  50% { box-shadow: 0 0 0 6px rgba(163,49,63,0); }
+}
+
+/* Мягкий вариант для неоднозначного (yellow) случая - НЕ пульсирует, не
+   красный: это "стоит присмотреться", а не "доказано". Ложное ощущение
+   тревоги здесь так же вредно, как и её отсутствие при реальном красном. */
+.mismatch-alert.soft {
+  border-color: var(--tier-yellow);
+  background: var(--tier-yellow-soft);
+  animation: none;
+}
+.mismatch-alert.soft .text b { color: var(--tier-yellow); }
 
