@@ -26,6 +26,7 @@ api_analyze.py
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -37,7 +38,7 @@ import preprocess_corpus as prep
 import train_model as tm
 
 PROJECT_DIR = Path(__file__).parent
-MODEL_DIR = PROJECT_DIR / "model"
+MODEL_DIR = PROJECT_DIR / "model"  # переопределяется флагом --model-dir при запуске
 
 # author_style_pipeline.joblib был сохранён при запуске train_model.py
 # напрямую (модуль __main__), поэтому кастомные трансформеры должны быть
@@ -58,7 +59,9 @@ except ImportError:
         resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
         return resp
 
-MIN_WORDS_FOR_STYLE = 25  # короче - стилометрия слишком шумная, помечаем как "too_short"
+MIN_WORDS_FOR_STYLE = 25  # значение по умолчанию для "старой" (только 1500 слов)
+                           # модели - см. _load_style_model(), где оно
+                           # автоматически понижается для multiscale-модели.
 
 # Пороги СИНХРОНИЗИРОВАНЫ с app.py (BAND_RED_MAX/GREEN_MIN, AI_BAND_RED_MAX/
 # GREEN_MIN) - раздельно для стиля и для ИИ, т.к. у ложного обвинения в ИИ
@@ -75,9 +78,31 @@ _LABEL_ENCODER = None
 
 
 def _load_style_model():
-    global _PIPELINE, _LABEL_ENCODER
+    global _PIPELINE, _LABEL_ENCODER, MIN_WORDS_FOR_STYLE
     if _PIPELINE is None:
         _PIPELINE, _LABEL_ENCODER = tm.load_model(MODEL_DIR)
+
+        # Порог "текст слишком короткий для стилометрии" был откалиброван
+        # под старую модель (обучена только на ~1500-словных чанках - при
+        # 25 словах она НИКОГДА не видела ничего похожего на обучении, но
+        # 25 всё равно было условной цифрой "хоть что-то", не измеренной).
+        # Для multiscale-модели (см. train_model.py build-multiscale и
+        # compare_models.py) есть честные held-out метрики по масштабам в
+        # model_meta.json - "phrase" (10-25 слов) даёт ~60%+ accuracy на
+        # НЕВИДЕННЫХ данных (при случайности 20% на 5 авторов), поэтому для
+        # такой модели порог можно и нужно понизить, иначе преимущество
+        # переобучения не используется на практике.
+        meta_path = MODEL_DIR / "model_meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta.get("held_out_metrics_by_scale"):
+                    MIN_WORDS_FOR_STYLE = 10
+                    print(f"Обнаружена multiscale-модель ({MODEL_DIR}) - "
+                          f"MIN_WORDS_FOR_STYLE понижен до {MIN_WORDS_FOR_STYLE} "
+                          f"(см. held_out_metrics_by_scale в {meta_path.name}).")
+            except (json.JSONDecodeError, OSError):
+                pass
     return _PIPELINE, _LABEL_ENCODER
 
 
@@ -224,7 +249,16 @@ def analyze():
 
 
 if __name__ == "__main__":
-    print("Загружаю модель...")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model-dir", type=Path, default=MODEL_DIR,
+                     help="папка с author_style_pipeline.joblib "
+                          "(например ./model_multiscale для новой модели)")
+    ap.add_argument("--port", type=int, default=5001)
+    args = ap.parse_args()
+
+    MODEL_DIR = args.model_dir
+    print(f"Загружаю модель из {MODEL_DIR} ...")
     _load_style_model()
-    print("Модель загружена. Запускаю API на http://127.0.0.1:5001")
-    app.run(host="127.0.0.1", port=5001, debug=False)
+    print(f"Модель загружена. Запускаю API на http://127.0.0.1:{args.port}")
+    app.run(host="127.0.0.1", port=args.port, debug=False)
