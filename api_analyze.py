@@ -75,6 +75,66 @@ AI_GREEN_MIN = 0.90
 
 _PIPELINE = None
 _LABEL_ENCODER = None
+_MODEL_META_CACHE: dict | None = None
+
+# (нижняя_граница_слов, ключ_масштаба_в_model_meta.json, понятная подпись)
+# ЗЕРКАЛО app.py::_WORD_COUNT_BANDS - держите в синхроне, иначе Flask-версия
+# (report_simple.html) и это API (UniPlatform) дадут разные формулировки
+# доверия для текста одной и той же длины.
+_WORD_COUNT_BANDS = [
+    (900, "large", "полноценная работа (900+ слов)"),
+    (600, "medium", "объёмный текст (600-900 слов)"),
+    (250, "semi_small", "средний по объёму текст (250-600 слов)"),
+    (60, "window", "короткий текст (60-250 слов)"),
+    (0, "phrase", "очень короткий текст/фраза (менее 60 слов)"),
+]
+
+
+def _load_model_meta() -> dict:
+    global _MODEL_META_CACHE
+    if _MODEL_META_CACHE is None:
+        meta_path = MODEL_DIR / "model_meta.json"
+        try:
+            _MODEL_META_CACHE = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            _MODEL_META_CACHE = {}
+    return _MODEL_META_CACHE
+
+
+def confidence_for_word_count(n_words: int) -> dict:
+    """Честная, непрофессионалу понятная оценка того, насколько можно
+    доверять style%/highlighting ИМЕННО для текста такой длины - на основе
+    held_out_metrics_by_scale активной модели (см. train_model.py
+    build-multiscale и compare_models.py), а не общей точности "в среднем".
+    Идентична app.py::confidence_for_word_count - см. её докстринг."""
+    meta = _load_model_meta()
+    by_scale = meta.get("held_out_metrics_by_scale")
+
+    band_label = next(label for lo, _, label in _WORD_COUNT_BANDS if n_words >= lo)
+    scale_key = next(key for lo, key, _ in _WORD_COUNT_BANDS if n_words >= lo)
+
+    if not by_scale or scale_key not in by_scale:
+        if n_words >= 900:
+            return {"bandLabel": band_label, "level": "known",
+                    "accuracyPct": round(meta.get("held_out_accuracy", 0) * 100, 1),
+                    "text": "Модель проверялась именно на текстах такой длины - "
+                            "оценке для такого объёма можно доверять."}
+        return {"bandLabel": band_label, "level": "unknown", "accuracyPct": None,
+                "text": "Эта модель обучена и проверена только на объёмных текстах "
+                        "(около 1500 слов) - для более коротких текстов её "
+                        "достоверность отдельно не измерялась, относитесь к "
+                        "результату с осторожностью."}
+
+    acc = round(by_scale[scale_key]["accuracy"] * 100, 1)
+    if acc >= 90:
+        level, text = "high", "Модель проверялась на текстах такой длины и почти всегда угадывает автора верно."
+    elif acc >= 70:
+        level, text = "good", "Модель проверялась на текстах такой длины и в большинстве случаев угадывает автора верно."
+    elif acc >= 50:
+        level, text = "moderate", "Для текста такой длины модель ошибается заметно чаще - относитесь к результату как к ориентиру, а не к доказательству."
+    else:
+        level, text = "low", "Для текста такой длины модель часто ошибается - на этот результат не стоит полагаться серьёзно, нужен более длинный текст для надёжной оценки."
+    return {"bandLabel": band_label, "level": level, "accuracyPct": acc, "text": text}
 
 
 def _load_style_model():
@@ -231,6 +291,8 @@ def analyze():
         if a["aiTier"] == "red" or (a["styleTier"] == "red")
     )
 
+    n_words = len(raw_text.split())
+
     return jsonify({
         "expectedAuthor": expected_author,
         "docStyleScore": doc_style_score,
@@ -238,6 +300,8 @@ def analyze():
         "docAiScore": doc_ai_score,
         "docAiTier": doc_ai_tier,
         "styleReliable": style_reliable,
+        "confidence": confidence_for_word_count(n_words),
+        "wordCount": n_words,
         "totalParagraphs": len(analyzed),
         "flaggedParagraphs": flagged_paragraphs,
         "paragraphs": analyzed,
