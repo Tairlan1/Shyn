@@ -2,3 +2,16 @@
 __pycache__/
 *.pyc
 .vscode/
+
+# Регенерируемые артефакты предобработки/обучения - НЕ храним в git,
+# т.к. их легко пересобрать заново, а размер (десятки МБ) только раздувает
+# историю репозитория без пользы:
+#   python preprocess_corpus.py           -> data_processed/*.json, *.log
+#   python train_model.py build-multiscale ... -> dataset_multiscale.jsonl
+#   python train_model.py train ...            -> ood_novelty.joblib (внутри model*/)
+data_processed/dataset_multiscale.jsonl
+data_processed/duplicates_report.json
+data_processed/preprocessing.log
+data_processed/quality_report.json
+model_multiscale/ood_novelty.joblib
+model/ood_novelty.joblib
