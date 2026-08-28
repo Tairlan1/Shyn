@@ -1,11 +1,55 @@
-# Атрибуция авторства: Doyle / Poe / Wells / London / Twain
+# Shyndyq — атрибуция авторского стиля + AI-детекция
 
-Два файла:
+Два независимых ML-пайплайна поверх одного и того же корпуса из пяти
+авторов (Doyle / Poe / Wells / London / Twain):
 
-- **`preprocess_corpus.py`** — очистка корпуса и нарезка на окна ~1500 слов.
-- **`train_model.py`** — обучение модели атрибуции авторства и предсказание
-  автора для нового текста. Импортирует `preprocess_corpus.py`, поэтому
-  оба файла должны лежать в одной папке.
+1. **Авторский стиль** — насколько текст статистически похож на стиль
+   одного из пяти известных авторов (`train_model.py`, `model/`).
+2. **AI Detection** — похож ли текст на результат работы языковой модели
+   (`train_ai_detector.py`, `model_ai_detector/`).
+
+Оба вердикта показываются вместе, но НЕ влияют друг на друга при расчёте —
+согласование (например, скрытие style% при явном AI-детекте) происходит
+только на уровне отображения (`app.py`).
+
+## Карта репозитория
+
+**Данные и обучение (по порядку использования):**
+- `data/<Автор>/*.txt` — исходный корпус (сырые тексты).
+- `preprocess_corpus.py` → `data_processed/dataset.jsonl` — очистка и нарезка на ~1500-словные чанки.
+- `train_model.py` — обучение модели авторского стиля; также содержит
+  `build-multiscale` (см. Шаг 4 ниже) для дообучения на коротких фрагментах.
+- `train_ai_detector.py` → `model_ai_detector/` — обучение AI-детектора
+  (мульти-источник по `data_ai_detector/sources/<модель>/`, см. его докстринг).
+- `ai_detector.py` / `ai_heuristics.py` / `ai_features.py` — инференс и
+  признаки AI-детектора (используются и обучением, и `app.py`/`api_analyze.py`).
+- `preprocess_corpus.py`, `doc_extract.py` — переиспользуемые утилиты
+  (очистка текста, извлечение текста из .docx/.pdf).
+- `compare_models.py` — честное сравнение старой/новой модели стиля по масштабам.
+- `validate_novelty_detector.py` — проверка экспериментального OOD-детектора
+  перед включением (см. `NOVELTY_GATING_ENABLED` в `app.py`).
+
+**Приложения (два независимых входа к одним и тем же моделям):**
+- `app.py` + `templates/` + `static/` — самодостаточный Flask-сайт
+  (дашборд, отчёт технический и «простой» без жаргона `report_simple.html`).
+  Запуск: `python app.py --model-dir model_multiscale`.
+- `api_analyze.py` — JSON REST API для внешних фронтендов. Используется
+  React-порталом [UniPlatform](https://github.com/Tairlan1/UniPlatform)
+  (см. `BACKEND.md` там). Запуск: `python api_analyze.py --model-dir model_multiscale`.
+
+**Модели (обученные артефакты):**
+- `model/` — базовая модель стиля (только ~1500-словные чанки).
+- `model_multiscale/` — рекомендуемая модель стиля (также точна на коротких
+  фрагментах, см. Шаг 4). Именно её сейчас использует прод (`--model-dir model_multiscale`).
+- `model_ai_detector/` — AI-детектор.
+
+Оба `model/` и `model_multiscale/` хранятся в git намеренно — `compare_models.py`
+использует обе сразу. Мелкие регенерируемые файлы (`dataset_multiscale.jsonl`,
+`ood_novelty.joblib`, отчёты предобработки) — не хранятся, см. `.gitignore`.
+
+---
+
+## Часть 1: авторский стиль
 
 ## Установка
 
@@ -115,18 +159,43 @@ model/model_meta.json
 python train_model.py predict --model-dir ./model --input unknown.txt
 # или
 python train_model.py predict --model-dir ./model --text "some raw text..." --json
-checker
-
-python train_model.py predict --model-dir "C:\Users\Tair\Desktop\Shyndyq\model" --input "C:\Users\Tair\Desktop\Shyndyq\data\Tairlan\Book_1.txt"
-
-python train_model.py train --data "C:\Users\Tair\Desktop\Shyndyq\data_processed\dataset.jsonl" --model-dir "C:\Users\Tair\Desktop\Shyndyq\model" --cv-folds 5 --test-size 0.15
-```       
+```
 
 Текст проходит через тот же пайплайн очистки и нарезки на окна ~1500 слов,
 модель предсказывает вероятность по каждому окну, и они агрегируются
 (геометрическое среднее вероятностей) в общий вердикт по всему тексту с
 разбивкой по каждому отдельному окну — так видно, устойчив ли вывод модели
 или на разные части текста она отвечает по-разному.
+
+## Шаг 4 (опционально). Модель на фрагментах разного масштаба
+
+Модель из шага 2 обучена только на ~1500-словных чанках, поэтому плохо
+оценивает короткие фрагменты (предложение, абзац, окно подсветки). Чтобы
+это исправить:
+
+```bash
+python train_model.py build-multiscale \
+    --data data_processed/dataset.jsonl \
+    --output data_processed/dataset_multiscale.jsonl
+
+python train_model.py train \
+    --data data_processed/dataset_multiscale.jsonl \
+    --model-dir ./model_multiscale
+```
+
+Первая команда достраивает к исходным чанкам производные фрагменты меньшего
+размера (medium/semi_small/window/sentence/phrase — вплоть до
+словосочетаний) из того же самого текста. Вторая — обучает модель на этой
+смеси через тот же пайплайн, что и в шаге 2. Результат — в отдельной папке
+(`./model` не перезаписывается), чтобы можно было сравнить обе модели:
+
+```bash
+python compare_models.py   # честное сравнение старой и новой модели по масштабам
+```
+
+`data_processed/dataset_multiscale.jsonl` и `model_multiscale/ood_novelty.joblib`
+**не хранятся в git** (см. `.gitignore`) — это регенерируемые артефакты
+(десятки МБ), пересобираются командами выше за секунды-минуты, а не часы.
 
 ## Замечания по качеству/масштабированию
 
