@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Простой отчёт · {{ sub.title }}{% endblock %}
+
+{% block content %}
+<div class="simple-report">
+
+  <div class="simple-topline">
+    <a href="{{ url_for('report', sub_id=sub.id) }}" class="simple-switch">Технический отчёт (для специалистов) →</a>
+  </div>
+
+  <h1 class="simple-h1">{{ sub.title }}</h1>
+  <p class="simple-sub">{{ sub.subject_name }} · сдано {{ sub.date }} · {{ sub.n_words }} слов</p>
+
+  {# ===================== БЛОК 1: ГЛАВНЫЙ ВОПРОС - ЭТО ИИ? ===================== #}
+  {% if sub.ai_tier == 'red' %}
+  <div class="simple-card simple-card--red">
+    <div class="simple-card-icon">⚠️</div>
+    <div>
+      <h2 class="simple-card-title">С высокой вероятностью текст написан не человеком, а нейросетью</h2>
+      <p class="simple-card-text">
+        Наш инструмент нашёл в тексте несколько статистических признаков, которые часто встречаются
+        в текстах, сгенерированных программами вроде ChatGPT. Это <b>не является железным доказательством</b> —
+        такое иногда бывает и у настоящего человеческого текста — но повод для того, чтобы
+        преподаватель лично поговорил со студентом о том, как создавалась эта работа.
+      </p>
+    </div>
+  </div>
+  {% elif sub.ai_tier == 'yellow' %}
+  <div class="simple-card simple-card--yellow">
+    <div class="simple-card-icon">🔎</div>
+    <div>
+      <h2 class="simple-card-title">Есть отдельные моменты, на которые стоит обратить внимание</h2>
+      <p class="simple-card-text">
+        Ничего страшного не найдено, но пара мест в тексте выглядит немного нетипично для
+        живого человеческого письма. Это встречается и у полностью самостоятельных работ —
+        просто повод присмотреться повнимательнее, а не что-то однозначное.
+      </p>
+    </div>
+  </div>
+  {% else %}
+  <div class="simple-card simple-card--green">
+    <div class="simple-card-icon">✅</div>
+    <div>
+      <h2 class="simple-card-title">Признаков использования нейросети не найдено</h2>
+      <p class="simple-card-text">
+        Текст по своим статистическим особенностям похож на обычный человеческий текст.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ===================== БЛОК 2: НАСКОЛЬКО ПОХОЖ СТИЛЬ ===================== #}
+  <div class="simple-section">
+    <h2 class="simple-h2">Насколько стиль похож на {{ sub.target_author_display }}?</h2>
+
+    {% if sub.ai_tier == 'red' %}
+      <p class="simple-p">
+        Мы <b>не показываем</b> процент совпадения стиля в этом случае. Раз текст, скорее всего,
+        написан нейросетью (см. выше), сравнивать его стиль с настоящим автором бессмысленно —
+        число всё равно ничего бы не доказывало.
+      </p>
+    {% else %}
+      <div class="simple-gauge-row">
+        <div class="simple-gauge" style="--pct: {{ sub.style_overall_pct }}; --clr: var(--style-accent);">
+          <div class="simple-gauge-num">{{ sub.style_overall_pct }}<span>%</span></div>
+        </div>
+        <div class="simple-gauge-caption">
+          {% if sub.style_overall_pct >= 80 %}
+            <p class="simple-p"><b>Высокое совпадение.</b> По статистическим особенностям (длина предложений,
+            выбор слов и т.д.) текст сильно похож на то, как обычно пишет {{ sub.target_author_display }}.</p>
+          {% elif sub.style_overall_pct >= 33 %}
+            <p class="simple-p"><b>Частичное совпадение.</b> Кое-что похоже, кое-что — нет. Однозначного
+            вывода по одному только стилю сделать нельзя.</p>
+          {% else %}
+            <p class="simple-p"><b>Низкое совпадение.</b> Стиль текста статистически заметно отличается
+            от того, как обычно пишет {{ sub.target_author_display }}.</p>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  {# ===================== БЛОК 3: НАСКОЛЬКО МОЖНО ДОВЕРЯТЬ ЭТОЙ ЦИФРЕ ===================== #}
+  {% if sub.ai_tier != 'red' %}
+  <div class="simple-section simple-section--muted">
+    <h2 class="simple-h2">Насколько можно доверять этой оценке?</h2>
+    <p class="simple-p">
+      Ваш текст — это <b>{{ sub.confidence.band_label }}</b>.
+      {{ sub.confidence.text }}
+      {% if sub.confidence.accuracy_pct is not none %}
+      <br><span class="simple-note">(на проверочных текстах такой же длины инструмент угадывал автора верно
+      в {{ sub.confidence.accuracy_pct }}% случаев)</span>
+      {% endif %}
+    </p>
+    <p class="simple-p simple-note">
+      Простое правило: чем длиннее текст, тем надёжнее оценка. Для одной фразы или пары
+      предложений полагаться на процент совпадения не стоит — а вот для полноценного эссе
+      результату уже можно доверять заметно больше.
+    </p>
+  </div>
+  {% endif %}
+
+  {# ===================== БЛОК 4: ЧТО ЭТО ЗНАЧИТ / НЕ ЗНАЧИТ ===================== #}
+  <div class="simple-section">
+    <h2 class="simple-h2">Что важно понимать про этот отчёт</h2>
+    <ul class="simple-list">
+      <li><b>Это не приговор.</b> Инструмент даёт статистический ориентир, а не доказательство.
+        Итоговое решение по работе всегда принимает преподаватель.</li>
+      <li><b>Студент имеет право на объяснение.</b> Если что-то показалось подозрительным, у студента
+        должна быть возможность рассказать, как создавалась работа, прежде чем будут сделаны выводы.</li>
+      <li><b>Ошибки возможны в обе стороны.</b> Инструмент может как пропустить настоящую проблему,
+        так и (реже) отметить полностью самостоятельную работу — поэтому финальное слово за человеком.</li>
+    </ul>
+  </div>
+
+  <div class="simple-footer">
+    <a href="{{ url_for('dashboard') }}" class="simple-switch">← Ко всем работам</a>
+    <a href="{{ url_for('report', sub_id=sub.id) }}" class="simple-switch">Посмотреть технический отчёт с подсветкой по тексту →</a>
+  </div>
+
+</div>
+{% endblock %}

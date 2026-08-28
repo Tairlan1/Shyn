@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import html
 import itertools
+import json
 import re
 import threading
 import uuid
@@ -241,9 +242,74 @@ def render_dual_highlight_html(raw_text: str, windows: list[dict]) -> str:
 
 
 # =============================================================================
-# Основной анализ (два НЕЗАВИСИМЫХ расчёта: стиль через ML-пайплайн,
-# ИИ-индикатор через отдельную эвристику - друг на друга не влияют).
+# Достоверность оценки в зависимости от длины текста - для непрофессионалов.
+# Использует ЧЕСТНЫЕ (held-out, на невиданных книгах) метрики по масштабам
+# фрагмента из model_meta.json multiscale-модели (см. train_model.py
+# build-multiscale и compare_models.py). Если активная модель обучена по
+# старой схеме (только ~1500 слов, без held_out_metrics_by_scale) -
+# используется общий, менее точный, но честно консервативный текст.
 # =============================================================================
+
+# (нижняя_граница_слов, ключ_масштаба_в_model_meta.json, понятная подпись)
+_WORD_COUNT_BANDS = [
+    (900, "large", "полноценная работа (900+ слов)"),
+    (600, "medium", "объёмный текст (600-900 слов)"),
+    (250, "semi_small", "средний по объёму текст (250-600 слов)"),
+    (60, "window", "короткий текст (60-250 слов)"),
+    (0, "phrase", "очень короткий текст/фраза (менее 60 слов)"),
+]
+
+_MODEL_META_CACHE: dict | None = None
+
+
+def _load_model_meta() -> dict:
+    global _MODEL_META_CACHE
+    if _MODEL_META_CACHE is None:
+        meta_path = MODEL_DIR / "model_meta.json"
+        try:
+            _MODEL_META_CACHE = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            _MODEL_META_CACHE = {}
+    return _MODEL_META_CACHE
+
+
+def confidence_for_word_count(n_words: int) -> dict:
+    """Возвращает понятное (без жаргона) описание того, насколько можно
+    доверять оценке стиля ИМЕННО для текста такой длины - на основе честных
+    held-out метрик по масштабам (не общей точности модели "в среднем"),
+    если они есть у текущей модели."""
+    meta = _load_model_meta()
+    by_scale = meta.get("held_out_metrics_by_scale")
+
+    band_label = next(label for lo, _, label in _WORD_COUNT_BANDS if n_words >= lo)
+    scale_key = next(key for lo, key, _ in _WORD_COUNT_BANDS if n_words >= lo)
+
+    if not by_scale or scale_key not in by_scale:
+        # Модель без по-масштабной валидации (старая, только 1500 слов) -
+        # честно говорим, что для текста короче ~1000 слов достоверность
+        # оценки нам неизвестна, вместо того чтобы придумывать число.
+        if n_words >= 900:
+            return {"band_label": band_label, "level": "known",
+                    "accuracy_pct": round(meta.get("held_out_accuracy", 0) * 100, 1),
+                    "text": "Модель проверялась именно на текстах такой длины - "
+                            "оценке для такого объёма можно доверять."}
+        return {"band_label": band_label, "level": "unknown", "accuracy_pct": None,
+                "text": "Эта модель обучена и проверена только на объёмных текстах "
+                        "(около 1500 слов) - для более коротких текстов её "
+                        "достоверность отдельно не измерялась, относитесь к "
+                        "результату с осторожностью."}
+
+    acc = round(by_scale[scale_key]["accuracy"] * 100, 1)
+    if acc >= 90:
+        level, text = "high", "Модель проверялась на текстах такой длины и почти всегда угадывает автора верно."
+    elif acc >= 70:
+        level, text = "good", "Модель проверялась на текстах такой длины и в большинстве случаев угадывает автора верно."
+    elif acc >= 50:
+        level, text = "moderate", "Для текста такой длины модель ошибается заметно чаще - относитесь к результату как к ориентиру, а не к доказательству."
+    else:
+        level, text = "low", "Для текста такой длины модель часто ошибается - на этот результат не стоит полагаться серьёзно, нужен более длинный текст для надёжной оценки."
+    return {"band_label": band_label, "level": level, "accuracy_pct": acc, "text": text}
+
 
 def analyze_text(raw_text: str, target_author: str) -> dict:
     if not raw_text or not raw_text.strip():
@@ -346,6 +412,7 @@ def analyze_text(raw_text: str, target_author: str) -> dict:
         "doc_html": doc_html,
         "n_windows": len(windows),
         "n_words": len(raw_text.split()),
+        "confidence": confidence_for_word_count(len(raw_text.split())),
     }
 
 
@@ -606,6 +673,14 @@ def report(sub_id: int):
     if mode not in ("style", "ai"):
         mode = "style"
     return render_template("report.html", sub=sub, initial_mode=mode)
+
+
+@app.route("/report/<int:sub_id>/simple")
+def report_simple(sub_id: int):
+    sub = SUBMISSIONS.get(sub_id)
+    if sub is None:
+        abort(404)
+    return render_template("report_simple.html", sub=sub)
 
 
 def main():

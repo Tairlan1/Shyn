@@ -2,6 +2,7 @@
 {% block title %}{{ sub.title }} — разбор{% endblock %}
 {% block content %}
 <a class="link-back" href="{{ url_for('dashboard') }}">← Назад к работам</a>
+<a class="simple-switch" style="float:right;" href="{{ url_for('report_simple', sub_id=sub.id) }}">Простой отчёт (без терминов) →</a>
 
 <div class="report-head">
   <div>
