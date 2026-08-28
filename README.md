@@ -142,3 +142,6 @@ python train_model.py train --data "C:\Users\Tair\Desktop\Shyndyq\data_processed
   и не усложнять инфраструктуру (GPU, токенизаторы, время обучения) без
   явной необходимости — классический стилометрический подход уже даёт
   очень сильный результат для этой задачи.
+
+
+  python api_analyze.py --model-dir model_multiscale
