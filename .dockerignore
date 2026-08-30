@@ -1,0 +1,12 @@
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+tests
+*.db
+data_processed/dataset_multiscale.jsonl
+model_multiscale/ood_novelty.joblib
+model/ood_novelty.joblib
+node_modules

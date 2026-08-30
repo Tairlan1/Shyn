@@ -1,0 +1,21 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    command: ["python", "app.py", "--host", "0.0.0.0", "--port", "5000", "--model-dir", "model_multiscale"]
+    volumes:
+      - shyndyq-data:/app/data-volume
+    restart: unless-stopped
+
+  api:
+    build: .
+    ports:
+      - "5001:5001"
+    command: ["python", "api_analyze.py", "--host", "0.0.0.0", "--port", "5001", "--model-dir", "model_multiscale"]
+    restart: unless-stopped
+    # api_analyze.py не пишет в SUBMISSIONS/shyndyq.db (это только у app.py) -
+    # том с данными ему не нужен.
+
+volumes:
+  shyndyq-data:

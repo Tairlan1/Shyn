@@ -318,11 +318,14 @@ if __name__ == "__main__":
     ap.add_argument("--model-dir", type=Path, default=MODEL_DIR,
                      help="папка с author_style_pipeline.joblib "
                           "(например ./model_multiscale для новой модели)")
+    ap.add_argument("--host", default="127.0.0.1",
+                     help="0.0.0.0 нужен при запуске в Docker/на удалённом "
+                          "сервере, иначе API будет недоступен снаружи контейнера")
     ap.add_argument("--port", type=int, default=5001)
     args = ap.parse_args()
 
     MODEL_DIR = args.model_dir
     print(f"Загружаю модель из {MODEL_DIR} ...")
     _load_style_model()
-    print(f"Модель загружена. Запускаю API на http://127.0.0.1:{args.port}")
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    print(f"Модель загружена. Запускаю API на http://{args.host}:{args.port}")
+    app.run(host=args.host, port=args.port, debug=False)
