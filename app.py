@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import argparse
 import html
-import itertools
 import json
+import os
 import re
 import threading
 import uuid
@@ -43,6 +43,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, url
 import ai_detector
 import ai_heuristics
 import doc_extract
+import storage
 import train_model
 from train_model import load_model, predict_author
 
@@ -139,7 +140,8 @@ def _ai_tier(ai_pct: float) -> str:
     (красный/вероятно ИИ). Пороги здесь СВОИ (AI_BAND_*), отдельные от
     порогов совпадения стиля - у ложного обвинения в ИИ намного выше цена
     ошибки, чем у заниженного Shyndyq %, поэтому по умолчанию AI-порог
-    красного заметно консервативнее (см. config.ini)."""
+    красного заметно консервативнее (см. AI_BAND_RED_MAX/AI_BAND_GREEN_MIN
+    выше в файле)."""
     if ai_pct >= AI_BAND_GREEN_MIN:
         return "red"
     if ai_pct <= AI_BAND_RED_MAX:
@@ -479,12 +481,14 @@ def ai_verdict_text(ai_pct: float, tier: str) -> tuple[str, str, str]:
 
 
 # =============================================================================
-# Хранилище сданных работ (в памяти процесса - для демонстрации платформы;
-# в реальном продукте это была бы таблица в БД учебной платформы).
+# Хранилище сданных работ - постоянное (SQLite, см. storage.py), переживает
+# перезапуск процесса. Путь к файлу базы настраивается через переменную
+# окружения SHYNDYQ_DB_PATH (удобно для тестов - см. tests/conftest.py) или
+# по умолчанию лежит рядом с app.py.
 # =============================================================================
 
-SUBMISSIONS: dict[int, dict] = {}
-_id_counter = itertools.count(1)
+DB_PATH = Path(os.environ.get("SHYNDYQ_DB_PATH", str(PROJECT_DIR / "shyndyq.db")))
+SUBMISSIONS = storage.SubmissionStore(DB_PATH)
 
 
 def make_submission(title: str, subject_code: str, raw_text: str,
@@ -503,7 +507,7 @@ def make_submission(title: str, subject_code: str, raw_text: str,
     ai_v, ai_stamp, ai_stamp_cls = ai_verdict_text(
         result["ai_overall_pct"], result["ai_tier"])
 
-    sub_id = next(_id_counter)
+    sub_id = SUBMISSIONS.next_id()
     sub = {
         "id": sub_id,
         "title": title or f"Работа №{sub_id}",
@@ -549,7 +553,14 @@ def seed_demo_submissions() -> None:
         make_submission("Возвращение на Бейкер-стрит (отрывок).docx",
                          "LIT-201", excerpt, "12 марта")
 
-    poe_path = data_dir / "Tairlan" / "Book_1.txt"
+    # ВАЖНО: раньше этот файл лежал в Tairlan/Book_1.txt (в корне репозитория,
+    # а не в data/) - путь ниже никогда не совпадал ни разу с самого первого
+    # коммита проекта, поэтому третья демо-работа никогда фактически не
+    # создавалась. Перенесено в data/_demo_samples/ с понятным именем при
+    # чистке архитектуры - содержимое specifically подобрано так, чтобы
+    # демонстрировать сценарий "стиль не похож на автора, но это не ИИ"
+    # (см. mismatch-баннер в Shyndyq.jsx/report.html).
+    poe_path = data_dir / "_demo_samples" / "gothic_essay_style_mismatch_sample.txt"
     if poe_path.exists():
         text = poe_path.read_text(encoding="utf-8", errors="replace")
         make_submission("Эссе о родоначальнике готической литературы.pdf",
@@ -705,9 +716,16 @@ def main():
               "также защиту от статистически аномального (не только "
               "ИИ-специфичного) текста.")
     print(f"Готово. Авторы: {list(LABEL_ENCODER.classes_)}")
-    print("Готовлю демонстрационные работы...")
-    seed_demo_submissions()
-    print(f"Демо-работ загружено: {len(SUBMISSIONS)}")
+    # Сеем демо-данные, только если хранилище пустое (первый запуск) - теперь,
+    # когда SUBMISSIONS - постоянное SQLite-хранилище (см. storage.py), а не
+    # словарь в памяти, повторный вызов при КАЖДОМ перезапуске плодил бы
+    # дубликаты демо-работ поверх уже сохранённых настоящих сдач.
+    if len(SUBMISSIONS) == 0:
+        print("Хранилище пустое - готовлю демонстрационные работы...")
+        seed_demo_submissions()
+        print(f"Демо-работ загружено: {len(SUBMISSIONS)}")
+    else:
+        print(f"Хранилище уже содержит {len(SUBMISSIONS)} сдач(и) - демо-данные не досеваются.")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 

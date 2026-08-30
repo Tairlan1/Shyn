@@ -46,15 +46,13 @@ preprocess_corpus.py
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import re
 import sys
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # Необязательные зависимости: скрипт обязан работать даже без них.
@@ -365,7 +363,6 @@ def compute_ocr_quality_score(text: str) -> dict:
     n = len(tokens)
     suspicious = 0
     for t in tokens:
-        tl = t.lower()
         if len(t) >= 4 and not re.search(r"[aeiouAEIOU]", t):
             suspicious += 1  # длинное слово без гласных - похоже на OCR-мусор
         elif re.search(r"[A-Z][a-z]*[A-Z]", t) and len(t) > 3:

@@ -56,7 +56,7 @@ from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import TruncatedSVD
-from sklearn.ensemble import IsolationForest, RandomForestClassifier, StackingClassifier
+from sklearn.ensemble import IsolationForest, StackingClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.metrics import (accuracy_score, classification_report,
@@ -959,7 +959,7 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command == "build-multiscale":
         build_multiscale_dataset(args.data, args.output)
-        print(f"\nГотово. Дальше обучите модель на новом датасете отдельной командой:")
+        print("\nГотово. Дальше обучите модель на новом датасете отдельной командой:")
         print(f"    python train_model.py train --data {args.output} "
               f"--model-dir ./model_multiscale")
         print("(в отдельную папку, а не в ./model, чтобы можно было сравнить "
