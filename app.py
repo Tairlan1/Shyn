@@ -556,11 +556,12 @@ def seed_demo_submissions() -> None:
     # ВАЖНО: раньше этот файл лежал в Tairlan/Book_1.txt (в корне репозитория,
     # а не в data/) - путь ниже никогда не совпадал ни разу с самого первого
     # коммита проекта, поэтому третья демо-работа никогда фактически не
-    # создавалась. Перенесено в data/_demo_samples/ с понятным именем при
-    # чистке архитектуры - содержимое specifically подобрано так, чтобы
-    # демонстрировать сценарий "стиль не похож на автора, но это не ИИ"
-    # (см. mismatch-баннер в Shyndyq.jsx/report.html).
-    poe_path = data_dir / "_demo_samples" / "gothic_essay_style_mismatch_sample.txt"
+    # создавалась. Перенесено в data/_demo_samples/ при чистке архитектуры.
+    # Этот же файл используется автором репозитория для ручной проверки
+    # AI-детектора на заведомо не участвовавшем в обучении тексте - поэтому
+    # имя файла сохранено как есть ("Poel's original work.txt"), а не
+    # переименовано.
+    poe_path = data_dir / "_demo_samples" / "Poel's original work.txt"
     if poe_path.exists():
         text = poe_path.read_text(encoding="utf-8", errors="replace")
         make_submission("Эссе о родоначальнике готической литературы.pdf",
