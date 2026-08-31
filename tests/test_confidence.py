@@ -11,14 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import app
+import analysis
+import config
 
 
 def _reset_meta_cache(model_dir: Path):
     """confidence_for_word_count кэширует model_meta.json на модуль -
-    тесты меняют app.MODEL_DIR, поэтому кэш нужно сбрасывать вручную."""
-    app.MODEL_DIR = model_dir
-    app._MODEL_META_CACHE = None
+    тесты меняют config.MODEL_DIR, поэтому кэш нужно сбрасывать вручную."""
+    config.MODEL_DIR = model_dir
+    analysis._MODEL_META_CACHE = None
 
 
 def test_multiscale_model_gives_real_accuracy(tmp_path):
@@ -31,7 +32,7 @@ def test_multiscale_model_gives_real_accuracy(tmp_path):
     )
     _reset_meta_cache(model_dir)
 
-    result = app.confidence_for_word_count(120)  # попадает в диапазон "window"
+    result = analysis.confidence_for_word_count(120)  # попадает в диапазон "window"
     assert result["level"] == "good"
     assert result["accuracy_pct"] == 80.0
     assert "80" not in result["text"]  # сама цифра выносится отдельным полем, не зашита в текст
@@ -45,7 +46,7 @@ def test_old_model_without_scale_metrics_is_honest_about_short_text(tmp_path):
     )
     _reset_meta_cache(model_dir)
 
-    result = app.confidence_for_word_count(120)  # короткий текст, метрик по масштабам нет
+    result = analysis.confidence_for_word_count(120)  # короткий текст, метрик по масштабам нет
     assert result["level"] == "unknown"
     assert result["accuracy_pct"] is None
     assert "не измерялась" in result["text"]
@@ -59,7 +60,7 @@ def test_old_model_trusts_long_text_it_was_actually_trained_on(tmp_path):
     )
     _reset_meta_cache(model_dir)
 
-    result = app.confidence_for_word_count(1500)  # родной масштаб старой модели
+    result = analysis.confidence_for_word_count(1500)  # родной масштаб старой модели
     assert result["level"] == "known"
     assert result["accuracy_pct"] == 94.7
 
@@ -69,7 +70,7 @@ def test_missing_model_meta_does_not_crash(tmp_path):
     model_dir.mkdir()
     _reset_meta_cache(model_dir)
 
-    result = app.confidence_for_word_count(50)
+    result = analysis.confidence_for_word_count(50)
     assert result["level"] == "unknown"
     assert result["accuracy_pct"] is None
 
@@ -84,6 +85,6 @@ def test_low_accuracy_scale_gives_low_confidence_wording(tmp_path):
     )
     _reset_meta_cache(model_dir)
 
-    result = app.confidence_for_word_count(15)  # попадает в диапазон "phrase"
+    result = analysis.confidence_for_word_count(15)  # попадает в диапазон "phrase"
     assert result["level"] == "low"
     assert result["accuracy_pct"] == 45.0

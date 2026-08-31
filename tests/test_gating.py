@@ -6,7 +6,7 @@ H.G. Wells - это же противоречит друг другу". Эти �
 
 from __future__ import annotations
 
-from app import style_verdict_text, ai_verdict_text
+from analysis import style_verdict_text, ai_verdict_text
 
 
 def test_ai_red_gates_style_verdict_regardless_of_raw_percentage():
