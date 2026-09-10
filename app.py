@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import threading
 import uuid
 from datetime import date
@@ -37,6 +38,7 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 
+import auth
 import config
 import doc_extract
 import storage
@@ -61,6 +63,30 @@ for _name in ("StylometricFeaturizer", "DenseTransformer",
 
 app = Flask(__name__)
 
+# SECRET_KEY подписывает cookie сессии (см. auth.py) - без него Flask вообще
+# отказывается работать с session. Берём из окружения (см. docker-compose.yml
+# SHYNDYQ_SECRET_KEY), чтобы сессии переживали перезапуск процесса/контейнера;
+# если переменная не задана (обычно только при локальном "python app.py" для
+# разработки), генерируем случайный ключ на этот запуск - это значит, что
+# после перезапуска все уже вошедшие пользователи должны будут залогиниться
+# заново, но НЕ означает угадываемый/дефолтный ключ в проде.
+_secret_key = os.environ.get("SHYNDYQ_SECRET_KEY")
+if not _secret_key:
+    _secret_key = secrets.token_hex(32)
+    print("ВНИМАНИЕ: переменная окружения SHYNDYQ_SECRET_KEY не задана - "
+          "сгенерирован случайный ключ сессии на этот запуск. Для прод-"
+          "окружения задайте SHYNDYQ_SECRET_KEY явно, иначе все сессии "
+          "будут сбрасываться при каждом перезапуске сервера.")
+app.secret_key = _secret_key
+
+
+@app.context_processor
+def inject_current_user():
+    # Делает auth.current_user() доступным во всех шаблонах как `user`
+    # (base.html показывает имя/группу и кнопку выхода) без необходимости
+    # прокидывать его вручную из каждого роута.
+    return {"user": auth.current_user()}
+
 
 # =============================================================================
 # Хранилище сданных работ - постоянное (SQLite, см. storage.py), переживает
@@ -74,7 +100,7 @@ SUBMISSIONS = storage.SubmissionStore(DB_PATH)
 
 
 def make_submission(title: str, subject_code: str, raw_text: str,
-                     sub_date: str) -> dict:
+                     sub_date: str, owner_login: str) -> dict:
     subject = SUBJECTS_BY_CODE[subject_code]
     target_author = subject["author"]
     result = analyze_text(raw_text, target_author)
@@ -96,6 +122,11 @@ def make_submission(title: str, subject_code: str, raw_text: str,
         "subject_code": subject_code,
         "subject_name": subject["name"],
         "date": sub_date,
+        # Владелец сдачи - используется для авторизации доступа к отчёту
+        # (см. auth.py::can_view_submission и роуты /report/<id>* в этом
+        # файле). Обязателен: без него любой мог бы открыть чужой отчёт,
+        # зная/перебрав числовой id (см. докстринг auth.py).
+        "owner_login": owner_login,
         **result,
         "style_verdict": style_v,
         "style_stamp": style_stamp,
@@ -133,7 +164,7 @@ def seed_demo_submissions() -> None:
         text = doyle_path.read_text(encoding="utf-8", errors="replace")
         excerpt = _truncate_at_paragraph(text, 1500)
         make_submission("Возвращение на Бейкер-стрит (отрывок).docx",
-                         "LIT-201", excerpt, "12 марта")
+                         "LIT-201", excerpt, "12 марта", auth.DEMO_SEED_OWNER)
 
     # ВАЖНО: раньше этот файл лежал в Tairlan/Book_1.txt (в корне репозитория,
     # а не в data/) - путь ниже никогда не совпадал ни разу с самого первого
@@ -147,7 +178,7 @@ def seed_demo_submissions() -> None:
     if poe_path.exists():
         text = poe_path.read_text(encoding="utf-8", errors="replace")
         make_submission("Эссе о родоначальнике готической литературы.pdf",
-                         "LIT-202", text, "15 марта")
+                         "LIT-202", text, "15 марта", auth.DEMO_SEED_OWNER)
 
     if doyle_path.exists():
         text = doyle_path.read_text(encoding="utf-8", errors="replace")
@@ -166,7 +197,7 @@ def seed_demo_submissions() -> None:
         )
         combined = excerpt + "\n\n" + ai_insert
         make_submission("Продолжение рассказа о Шерлоке Холмсе.docx",
-                         "LIT-201", combined, "18 марта")
+                         "LIT-201", combined, "18 марта", auth.DEMO_SEED_OWNER)
 
 
 # =============================================================================
@@ -178,10 +209,11 @@ JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 
 
-def _run_job(job_id: str, title: str, subject_code: str, raw_text: str) -> None:
+def _run_job(job_id: str, title: str, subject_code: str, raw_text: str,
+             owner_login: str) -> None:
     try:
         sub = make_submission(title, subject_code, raw_text,
-                               date.today().strftime("%d.%m.%Y"))
+                               date.today().strftime("%d.%m.%Y"), owner_login)
         with JOBS_LOCK:
             JOBS[job_id] = {"status": "done", "sub_id": sub["id"]}
     except ValueError as e:
@@ -196,6 +228,52 @@ def _run_job(job_id: str, title: str, subject_code: str, raw_text: str) -> None:
 # Flask routes
 # =============================================================================
 
+# Публичные эндпоинты, не требующие входа - всё остальное защищено
+# before_request-хуком ниже (см. auth.py про то, почему это понадобилось).
+_PUBLIC_ENDPOINTS = {"login", "static"}
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in _PUBLIC_ENDPOINTS or request.endpoint is None:
+        return None
+    if auth.current_user() is None:
+        if request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json":
+            abort(401)
+        return redirect(url_for("login", next=request.path))
+    return None
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        if auth.current_user() is not None:
+            return redirect(url_for("dashboard"))
+        return render_template("login.html", error=None,
+                                next_url=request.args.get("next", ""))
+
+    login_id = request.form.get("login", "").strip().lower()
+    password = request.form.get("password", "")
+    profile = auth.authenticate(login_id, password)
+    if profile is None:
+        return render_template("login.html",
+                                error="Неверный логин или пароль.",
+                                next_url=request.form.get("next", "")), 401
+    auth.login_user(profile)
+    next_url = request.form.get("next") or url_for("dashboard")
+    # Разрешаем редирект только на относительный путь внутри этого же сайта -
+    # иначе next было бы открытой redirect-дырой (open redirect).
+    if not next_url.startswith("/"):
+        next_url = url_for("dashboard")
+    return redirect(next_url)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    auth.logout_user()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
 def root():
     return redirect(url_for("dashboard"))
@@ -203,8 +281,17 @@ def root():
 
 @app.route("/dashboard")
 def dashboard():
-    subs = sorted(SUBMISSIONS.values(), key=lambda s: s["id"], reverse=True)
-    return render_template("dashboard.html", submissions=subs, subjects=SUBJECTS)
+    user = auth.current_user()
+    all_subs = sorted(SUBMISSIONS.values(), key=lambda s: s["id"], reverse=True)
+    if user["role"] == "teacher":
+        # Преподавателю нужно видеть все сдачи, чтобы проверять работы -
+        # это ЕГО легитимный доступ, а не та же дыра, что чинит эта задача:
+        # у teacher-роли доступ явный и по роли, а не по угадыванию id.
+        subs = all_subs
+    else:
+        subs = [s for s in all_subs if s.get("owner_login") == user["login"]]
+    return render_template("dashboard.html", submissions=subs, subjects=SUBJECTS,
+                            user=user)
 
 
 @app.route("/submit-work")
@@ -235,10 +322,11 @@ def submit():
     if not text or not text.strip():
         return jsonify({"error": "Не удалось получить текст работы — загрузите файл или вставьте текст."}), 400
 
+    owner_login = auth.current_user()["login"]
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "processing"}
-    thread = threading.Thread(target=_run_job, args=(job_id, title, subject_code, text), daemon=True)
+    thread = threading.Thread(target=_run_job, args=(job_id, title, subject_code, text, owner_login), daemon=True)
     thread.start()
 
     return jsonify({"job_id": job_id})
@@ -263,6 +351,7 @@ def report(sub_id: int):
     sub = SUBMISSIONS.get(sub_id)
     if sub is None:
         abort(404)
+    auth.require_submission_access(sub)
     mode = request.args.get("mode", "style")
     if mode not in ("style", "ai"):
         mode = "style"
@@ -274,7 +363,23 @@ def report_simple(sub_id: int):
     sub = SUBMISSIONS.get(sub_id)
     if sub is None:
         abort(404)
+    auth.require_submission_access(sub)
     return render_template("report_simple.html", sub=sub)
+
+
+@app.errorhandler(401)
+def handle_unauthorized(e):
+    return render_template("error.html", code=401, title="Нужно войти",
+                            message="Эта страница требует авторизации."), 401
+
+
+@app.errorhandler(403)
+def handle_forbidden(e):
+    return render_template(
+        "error.html", code=403, title="Доступ запрещён",
+        message="У вас нет прав на просмотр этого отчёта — он принадлежит "
+                "другому студенту. Если это ошибка, обратитесь к преподавателю."
+    ), 403
 
 
 def main():
@@ -313,6 +418,9 @@ def main():
         print(f"Демо-работ загружено: {len(SUBMISSIONS)}")
     else:
         print(f"Хранилище уже содержит {len(SUBMISSIONS)} сдач(и) - демо-данные не досеваются.")
+    print("Демо-аккаунты для входа (см. auth.py::DEMO_ACCOUNTS): "
+          "a.serikova/student2026, n.bekov/student2026, "
+          "d.tanirbergen/student2026 (студенты), teacher/teacher2026 (преподаватель).")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 

@@ -16,7 +16,17 @@
       <span class="brand-mark">Shyndyq</span>
       <span class="brand-sub">Авторский стиль &amp; ИИ-проверка</span>
     </a>
-    <div class="user-chip"><span class="user-dot"></span> Тайлан С. · гр. ПИ-21</div>
+    <div class="user-chip">
+      <span class="user-dot"></span>
+      {% if user %}
+        {{ user.display }} · {{ user.group }}
+        <form method="post" action="{{ url_for('logout') }}" style="display:inline; margin-left:10px;">
+          <button type="submit" class="link-back" style="all:unset; cursor:pointer; text-decoration:underline;">Выйти</button>
+        </form>
+      {% else %}
+        Не авторизован
+      {% endif %}
+    </div>
   </div>
 </div>
 <div class="shell">

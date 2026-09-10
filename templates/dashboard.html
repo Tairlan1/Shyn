@@ -1,10 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Личный кабинет — Shyndyq{% endblock %}
 {% block content %}
+{% if user and user.role == 'teacher' %}
+<div class="eyebrow">Кабинет преподавателя</div>
+<h1 class="page-title">Все сданные работы</h1>
+<p class="page-lede">Вы видите сдачи всех студентов, потому что вошли как преподаватель.
+Студенты видят в этом же разделе только свои собственные работы.</p>
+{% else %}
 <div class="eyebrow">Личный кабинет студента</div>
 <h1 class="page-title">Мои предметы</h1>
 <p class="page-lede">Выберите предмет и отправьте работу на проверку. Shyndyq оценит
 соответствие авторскому стилю и проверит текст на признаки ИИ-генерации.</p>
+{% endif %}
 
 <div class="subject-grid">
   {% for s in subjects %}
@@ -17,7 +24,7 @@
   {% endfor %}
 </div>
 
-<h2 class="section-heading">Мои работы</h2>
+<h2 class="section-heading">{% if user and user.role == 'teacher' %}Все сдачи{% else %}Мои работы{% endif %}</h2>
 {% if submissions %}
 <table class="works-table">
   <thead>

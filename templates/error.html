@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} — Shyndyq{% endblock %}
+{% block content %}
+<div class="eyebrow">Ошибка {{ code }}</div>
+<h1 class="page-title">{{ title }}</h1>
+<p class="page-lede">{{ message }}</p>
+<a class="btn btn-ghost btn-sm" href="{{ url_for('dashboard') if user else url_for('login') }}">
+  {% if user %}Вернуться в кабинет{% else %}Войти{% endif %}
+</a>
+{% endblock %}
