@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Вход — Shyndyq{% endblock %}
+{% block content %}
+<div class="eyebrow">Авторизация</div>
+<h1 class="page-title">Вход в Shyndyq</h1>
+<p class="page-lede">Войдите, чтобы отправлять работы и видеть отчёты по своим сдачам.
+Каждый отчёт виден только его автору и преподавателю.</p>
+
+<div class="card card-pad" style="max-width:420px;">
+  {% if error %}
+  <div class="error-box" style="display:block;">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('login') }}">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <div class="field">
+      <label for="login-input">Логин</label>
+      <input type="text" id="login-input" name="login" autocomplete="username" required
+             placeholder="например, a.serikova">
+    </div>
+    <div class="field">
+      <label for="password-input">Пароль</label>
+      <input type="password" id="password-input" name="password" autocomplete="current-password" required
+             placeholder="••••••••">
+    </div>
+    <button class="btn btn-primary" type="submit">Войти</button>
+  </form>
+
+  <p style="margin-top:18px; font-size:12.5px; color:var(--muted);">
+    Демо-доступ: <code>a.serikova</code> / <code>student2026</code>
+    (студент), <code>teacher</code> / <code>teacher2026</code> (преподаватель).
+  </p>
+</div>
+{% endblock %}

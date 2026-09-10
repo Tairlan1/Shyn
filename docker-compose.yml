@@ -6,6 +6,14 @@ services:
     command: ["python", "app.py", "--host", "0.0.0.0", "--port", "5000", "--model-dir", "model_multiscale"]
     volumes:
       - shyndyq-data:/app/data-volume
+    environment:
+      # Подписывает cookie сессии (см. auth.py) - без явного значения app.py
+      # сгенерирует случайный ключ на каждый запуск контейнера, и все уже
+      # вошедшие пользователи будут разлогинены при каждом перезапуске.
+      # Задайте здесь (или через .env / docker-compose secret) реальное
+      # случайное значение перед боевым развёртыванием, например:
+      #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      - SHYNDYQ_SECRET_KEY=${SHYNDYQ_SECRET_KEY:-}
     restart: unless-stopped
 
   api:
